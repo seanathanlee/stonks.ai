@@ -20,11 +20,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from azure.identity import DefaultAzureCredential
-from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
+from azure.kusto.data import KustoClient, KustoConnectionStringBuilder, DataFormat
 from azure.kusto.ingest import (
     IngestionProperties,
     QueuedIngestClient,
-    DataFormat,
 )
 
 
