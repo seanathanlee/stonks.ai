@@ -92,6 +92,34 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Wait for AcrPull role assignment to propagate
+        run: |
+          ACR_ID=$(az acr show \
+            --name "${{ needs.deploy-infrastructure.outputs.acr_name }}" \
+            --query id -o tsv)
+          PRINCIPAL_ID=$(az containerapp show \
+            --name "${{ needs.deploy-infrastructure.outputs.container_app_name }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query identity.principalId -o tsv)
+          echo "Waiting for AcrPull role to be visible for principal ${PRINCIPAL_ID} on ${ACR_ID}..."
+          for attempt in $(seq 1 20); do
+            COUNT=$(az role assignment list \
+              --assignee "$PRINCIPAL_ID" \
+              --scope "$ACR_ID" \
+              --role "AcrPull" \
+              --query "length(@)" -o tsv 2>/dev/null || echo "0")
+            if [ "${COUNT}" -ge 1 ]; then
+              echo "AcrPull role assignment confirmed after attempt ${attempt}."
+              break
+            fi
+            echo "Attempt ${attempt}/20: role not yet visible, sleeping 15 seconds..."
+            sleep 15
+          done
+          if [ "${COUNT}" -lt 1 ]; then
+            echo "ERROR: AcrPull role assignment not found after 5 minutes." >&2
+            exit 1
+          fi
+
       - name: Log in to Azure Container Registry
         run: az acr login --name "${{ needs.deploy-infrastructure.outputs.acr_name }}"
 
