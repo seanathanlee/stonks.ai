@@ -9,10 +9,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY agents/ ./agents/
+COPY api/ ./api/
+COPY frontend/ ./frontend/
 
-# Default command – run the agent with a sample query.
-# Override CMD or set the QUERY environment variable as needed.
 ENV PYTHONUNBUFFERED=1
 
-ENTRYPOINT ["python", "-m", "agents.agent"]
-CMD []
+EXPOSE 8000
+
+# Default: run the web server
+# Override CMD to run the CLI agent instead, e.g.:
+#   docker run stonks.ai python -m agents.agent "What is AAPL?"
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
