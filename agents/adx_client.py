@@ -81,6 +81,11 @@ def _rows_to_json_stream(rows: list[dict[str, Any]]) -> io.BytesIO:
 # ---------------------------------------------------------------------------
 
 
+def _as_of_datetime(date_str: str) -> str:
+    """Return a Kusto datetime literal for midnight UTC of an ISO-8601 date string."""
+    return f"datetime({date_str}T00:00:00Z)"
+
+
 def get_all_symbols(days: int = 30, as_of_date: str | None = None) -> list[str]:
     """
     Return the distinct set of symbols that have price data in ADX
@@ -97,10 +102,11 @@ def get_all_symbols(days: int = 30, as_of_date: str | None = None) -> list[str]:
     client = _get_kusto_client()
     if as_of_date is not None:
         _validate_iso_date(as_of_date, "as_of_date")
+        end = _as_of_datetime(as_of_date)
         query = (
             f"dailyStockPriceMV"
-            f" | where priceDate >= datetime({as_of_date}T00:00:00Z) - {int(days)}d"
-            f"   and priceDate <= datetime({as_of_date}T00:00:00Z)"
+            f" | where priceDate >= {end} - {int(days)}d"
+            f"   and priceDate <= {end}"
             f" | summarize by symbol"
         )
     else:
@@ -134,9 +140,10 @@ def get_price_history(
 
     symbol_list = ", ".join(f'"{s}"' for s in symbols)
     if as_of_date is not None:
+        end = _as_of_datetime(as_of_date)
         where_clause = (
-            f"priceDate >= datetime({as_of_date}T00:00:00Z) - {int(days)}d"
-            f" and priceDate <= datetime({as_of_date}T00:00:00Z)"
+            f"priceDate >= {end} - {int(days)}d"
+            f" and priceDate <= {end}"
         )
     else:
         where_clause = f"priceDate >= ago({int(days)}d)"
