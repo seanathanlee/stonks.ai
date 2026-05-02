@@ -379,6 +379,57 @@ def ingest_evaluations(rows: list[dict[str, Any]]) -> None:
     _get_ingest_client().ingest_from_stream(stream, ingestion_properties=props)
 
 
+def get_agent_evaluations(
+    horizon: str = "1m",
+    agent_name: str | None = None,
+    days: int = 30,
+) -> list[dict[str, Any]]:
+    """
+    Return per-agent accuracy evaluation metrics from the `agentStockEvaluation` table.
+
+    The accuracy score is a lower-is-better error metric: the average of the
+    absolute return error and absolute rank error for each prediction.
+
+    Each returned dict contains:
+        agentName           – child agent name
+        avgAccuracyScore    – mean accuracy score (lower = more accurate)
+        runCount            – number of distinct evaluation runs included
+        avgForecastReturn   – mean forecasted % return across evaluated picks
+        avgActualReturn     – mean realized % return across evaluated picks
+        horizon             – the horizon used for filtering
+    """
+    if days < 1:
+        raise ValueError(f"days must be a positive integer, got {days!r}")
+    if horizon not in ("1m", "3m", "6m", "1y"):
+        raise ValueError(f"Invalid horizon: {horizon!r}. Must be one of 1m, 3m, 6m, 1y.")
+
+    agent_filter = f'| where agentName == "{agent_name}"' if agent_name else ""
+    query = f"""
+agentStockEvaluation
+| where reportTime >= ago({int(days)}d)
+| where horizon == "{horizon}"
+{agent_filter}
+| summarize avgAccuracyScore = round(avg(accuracyScore), 4),
+            runCount = dcount(runId),
+            avgForecastReturn = round(avg(forecastReturn), 2),
+            avgActualReturn = round(avg(actualReturn), 2) by agentName
+| order by avgAccuracyScore asc
+"""
+    client = _get_kusto_client()
+    response = client.execute(_database(), query)
+    return [
+        {
+            "agentName": row["agentName"],
+            "avgAccuracyScore": float(row["avgAccuracyScore"]),
+            "runCount": int(row["runCount"]),
+            "avgForecastReturn": float(row["avgForecastReturn"]),
+            "avgActualReturn": float(row["avgActualReturn"]),
+            "horizon": horizon,
+        }
+        for row in response.primary_results[0]
+    ]
+
+
 def now_utc_iso() -> str:
     """Return the current UTC time as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()

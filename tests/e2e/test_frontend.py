@@ -341,3 +341,106 @@ def test_user_input_is_html_escaped(page_loaded: Page) -> None:
     expect(bubble).to_contain_text("<script>")
     # No actual <script> element should exist inside the bubble
     assert bubble.locator("script").count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Agent Roster panel
+# ---------------------------------------------------------------------------
+
+
+def test_roster_toggle_button_visible(page_loaded: Page) -> None:
+    """The 'Agents' toggle button must be visible in the header."""
+    expect(page_loaded.locator("#roster-toggle")).to_be_visible()
+
+
+def test_roster_panel_hidden_by_default(page_loaded: Page) -> None:
+    """The agent roster panel must be hidden before the toggle is clicked."""
+    panel = page_loaded.locator("#agent-roster")
+    expect(panel).not_to_have_class("open")
+
+
+def test_roster_panel_opens_on_click(page_loaded: Page) -> None:
+    """Clicking the Agents button must reveal the roster panel with agent cards."""
+    page_loaded.locator("#roster-toggle").click()
+
+    panel = page_loaded.locator("#agent-roster")
+    expect(panel).to_have_class("open")
+
+    # All 9 agent cards must be rendered
+    expect(panel.locator(".agent-card")).to_have_count(9)
+
+
+def test_roster_panel_shows_agent_names(page_loaded: Page) -> None:
+    """The roster panel must display the names of all 9 child agents."""
+    page_loaded.locator("#roster-toggle").click()
+
+    panel = page_loaded.locator("#agent-roster")
+    agent_names = [
+        "Momentum Trader",
+        "Mean Reversion",
+        "Value Investor",
+        "Growth Investor",
+        "Volatility Hunter",
+        "Sector Rotation",
+        "Technical Analyst",
+        "Contrarian Investor",
+        "Risk-Adjusted Optimizer",
+    ]
+    for name in agent_names:
+        expect(panel.locator(f".agent-name >> text={name}")).to_be_visible()
+
+
+def test_roster_panel_closes_on_second_click(page_loaded: Page) -> None:
+    """Clicking the Agents button a second time must hide the roster panel."""
+    toggle = page_loaded.locator("#roster-toggle")
+    toggle.click()
+    expect(page_loaded.locator("#agent-roster")).to_have_class("open")
+
+    toggle.click()
+    expect(page_loaded.locator("#agent-roster")).not_to_have_class("open")
+
+
+def test_evaluation_chart_rendered(page_loaded: Page) -> None:
+    """
+    When the API returns an evaluation chart payload, the frontend must
+    render a <canvas> element inside a .chart-card with the chart title.
+    """
+    eval_payload = {
+        "reply": "Here are the agent accuracy scores.",
+        "charts": [
+            {
+                "id": "eval_1m_abc12345",
+                "type": "bar",
+                "title": "Agent Accuracy Scores — 1m Horizon (lower = more accurate)",
+                "indexAxis": "y",
+                "labels": ["Momentum Trader", "Mean Reversion"],
+                "datasets": [
+                    {
+                        "label": "Avg Accuracy Score",
+                        "data": [1.5, 2.3],
+                        "backgroundColor": ["#3b82f6", "#22c55e"],
+                        "borderRadius": 4,
+                    }
+                ],
+            }
+        ],
+        "session_id": "test-session",
+    }
+
+    page_loaded.route(
+        "**/api/chat",
+        lambda route: route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=__import__("json").dumps(eval_payload),
+        ),
+    )
+
+    page_loaded.locator("#user-input").fill("How accurate are the agents?")
+    page_loaded.locator("#send-btn").click()
+
+    chart_card = page_loaded.locator(".chart-card").last
+    expect(chart_card).to_be_visible(timeout=5_000)
+    expect(chart_card.locator("h3")).to_contain_text("Agent Accuracy Scores")
+    expect(chart_card.locator("canvas#canvas_eval_1m_abc12345")).to_be_attached()
+

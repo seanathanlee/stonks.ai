@@ -277,6 +277,74 @@
     #messages::-webkit-scrollbar { width: 4px; }
     #messages::-webkit-scrollbar-track { background: transparent; }
     #messages::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 2px; }
+
+    /* ── Roster toggle button ── */
+    #roster-toggle {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-family: inherit;
+      padding: 5px 10px;
+      cursor: pointer;
+      transition: color 0.15s, border-color 0.15s;
+      letter-spacing: -0.1px;
+    }
+    #roster-toggle:hover { color: var(--text); border-color: rgba(255,255,255,0.2); }
+
+    /* ── Agent Roster panel ── */
+    #agent-roster {
+      display: none;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      overflow-y: auto;
+      max-height: 280px;
+      flex-shrink: 0;
+    }
+    #agent-roster.open { display: block; }
+
+    .roster-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 8px;
+    }
+
+    .agent-card {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .agent-card-header {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .agent-icon {
+      font-size: 16px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .agent-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: -0.1px;
+    }
+
+    .agent-desc {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
@@ -287,14 +355,21 @@
       <div class="logo">S</div>
       <h1>Stonks.ai</h1>
     </div>
-    <span id="status-dot" title="Ready"></span>
+    <div style="display:flex;align-items:center;gap:10px;">
+      <button id="roster-toggle" onclick="toggleRoster()" title="View agent descriptions">Agents ▾</button>
+      <span id="status-dot" title="Ready"></span>
+    </div>
   </header>
+
+  <div id="agent-roster" aria-label="Agent roster">
+    <div class="roster-grid" id="roster-grid"></div>
+  </div>
 
   <div id="messages"></div>
 
   <div id="suggestions">
     <button class="suggestion-btn" onclick="sendSuggestion(this)">Top picks this month</button>
-    <button class="suggestion-btn" onclick="sendSuggestion(this)">What should I invest in?</button>
+    <button class="suggestion-btn" onclick="sendSuggestion(this)">Run full analysis</button>
     <button class="suggestion-btn" onclick="sendSuggestion(this)">AAPL breakdown</button>
     <button class="suggestion-btn" onclick="sendSuggestion(this)">MSFT price history</button>
     <button class="suggestion-btn" onclick="sendSuggestion(this)">Best 1-year picks</button>
@@ -612,6 +687,84 @@ function formatMarkdown(text) {
   }).join('');
 
   return s;
+}
+
+// ── Agent Roster ───────────────────────────────────────────────────────────
+const AGENTS = [
+  {
+    name: "Momentum Trader",
+    icon: "📈",
+    desc: "Buys into strong upward momentum and breakouts. Tracks relative strength and rate of change.",
+  },
+  {
+    name: "Mean Reversion",
+    icon: "🔄",
+    desc: "Finds stocks that have fallen below their 30-day average and are likely to bounce back.",
+  },
+  {
+    name: "Value Investor",
+    icon: "💎",
+    desc: "Seeks undervalued blue-chip stocks near multi-month lows with low volatility.",
+  },
+  {
+    name: "Growth Investor",
+    icon: "🚀",
+    desc: "Targets high-growth technology, biotech, and consumer names making new highs.",
+  },
+  {
+    name: "Volatility Hunter",
+    icon: "⚡",
+    desc: "Seeks large intraday or day-over-day price swings for outsized profit potential.",
+  },
+  {
+    name: "Sector Rotation",
+    icon: "🔃",
+    desc: "Rotates into outperforming NASDAQ sectors by tracking cross-sector price momentum.",
+  },
+  {
+    name: "Technical Analyst",
+    icon: "📊",
+    desc: "Reads cup-and-handle patterns, ascending triangles, golden crosses, and other chart setups.",
+  },
+  {
+    name: "Contrarian Investor",
+    icon: "🔀",
+    desc: "Buys beaten-down names against the crowd when underlying fundamentals remain strong.",
+  },
+  {
+    name: "Risk-Adjusted Optimizer",
+    icon: "⚖️",
+    desc: "Maximises Sharpe ratio — balancing expected return against recent price volatility.",
+  },
+];
+
+// Render agent cards on first open
+let _rosterBuilt = false;
+function _buildRoster() {
+  if (_rosterBuilt) return;
+  const grid = document.getElementById('roster-grid');
+  AGENTS.forEach(agent => {
+    const card = document.createElement('div');
+    card.className = 'agent-card';
+    card.innerHTML = `
+      <div class="agent-card-header">
+        <span class="agent-icon">${agent.icon}</span>
+        <span class="agent-name">${escapeHtml(agent.name)}</span>
+      </div>
+      <div class="agent-desc">${escapeHtml(agent.desc)}</div>
+    `;
+    grid.appendChild(card);
+  });
+  _rosterBuilt = true;
+}
+
+function toggleRoster() {
+  _buildRoster();
+  const panel = document.getElementById('agent-roster');
+  const btn   = document.getElementById('roster-toggle');
+  const isOpen = panel.classList.toggle('open');
+  btn.textContent = isOpen ? 'Agents ▴' : 'Agents ▾';
+  btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
 }
 </script>
 </body>
