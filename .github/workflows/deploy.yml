@@ -131,6 +131,28 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Remove stale AcrPull role assignment
+        run: |
+          BASE_NAME="${{ vars.BASE_NAME || 'stonksai' }}"
+          ACR_ID=$(az acr show \
+            --name "${BASE_NAME}acr" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "id" -o tsv 2>/dev/null || true)
+          if [ -n "$ACR_ID" ]; then
+            PRINCIPAL_ID=$(az containerapp show \
+              --name "${BASE_NAME}-api" \
+              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+              --query "identity.principalId" -o tsv 2>/dev/null || true)
+            if [ -n "$PRINCIPAL_ID" ]; then
+              az role assignment list \
+                --assignee "$PRINCIPAL_ID" \
+                --role "AcrPull" \
+                --scope "$ACR_ID" \
+                --query "[].id" -o tsv 2>/dev/null \
+              | xargs -r -I{} az role assignment delete --ids {} || true
+            fi
+          fi
+
       - name: Deploy Bicep template
         id: bicep
         run: |
