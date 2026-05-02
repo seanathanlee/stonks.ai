@@ -24,7 +24,7 @@ _FRONTEND_DIR = Path(__file__).parent.parent.parent / "frontend"
 
 
 @pytest.fixture(scope="session")
-def frontend_url() -> str:  # type: ignore[return]
+def frontend_url() -> str:  # type: ignore[return]  # pytest fixture uses yield; mypy sees missing return
     """Start a one-shot HTTP server and return its base URL."""
     handler = functools.partial(
         http.server.SimpleHTTPRequestHandler,
