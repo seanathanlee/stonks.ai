@@ -82,6 +82,19 @@ def _rows_to_json_stream(rows: list[dict[str, Any]]) -> io.BytesIO:
 # ---------------------------------------------------------------------------
 
 
+def get_all_symbols(days: int = 30) -> list[str]:
+    """
+    Return the distinct set of symbols that have price data in ADX
+    for the last *days* days.
+    """
+    if days < 1:
+        raise ValueError(f"days must be a positive integer, got {days!r}")
+    client = _get_kusto_client()
+    query = f"dailyStockPrice | where priceDate >= ago({int(days)}d) | summarize by symbol"
+    response = client.execute(_database(), query)
+    return [row["symbol"] for row in response.primary_results[0]]
+
+
 def get_price_history(
     symbols: list[str], days: int = 30
 ) -> dict[str, list[dict[str, Any]]]:

@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from datetime import date, timedelta, timezone, datetime
+from datetime import date, timezone, datetime
 
 import requests
 from bs4 import BeautifulSoup
@@ -28,7 +28,6 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SYMBOL_LIST_URL = "https://stockanalysis.com/list/nasdaq-stocks/"
-PRICE_URL_TEMPLATE = "https://stockanalysis.com/stocks/{ticker}/financials/?p=quarterly"
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (compatible; stonks-scraper/1.0; +https://github.com/seanathanlee/stonks.ai)"
@@ -118,7 +117,7 @@ def fetch_price_history(
         for ts, price in zip(timestamps, closes):
             if price is None:
                 continue
-            trade_date = date.fromtimestamp(ts)
+            trade_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
             pairs.append((trade_date, float(price)))
         return pairs
     except Exception as exc:
@@ -134,7 +133,7 @@ def fetch_price_history(
 def run_daily(symbols: list[str]) -> None:
     """Fetch today's closing price for every symbol and ingest into ADX."""
     report_time = now_utc_iso()
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     rows: list[dict] = []
 
     for i, symbol in enumerate(symbols, start=1):

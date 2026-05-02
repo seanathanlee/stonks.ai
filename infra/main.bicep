@@ -114,7 +114,6 @@ resource dailyStockPriceTable 'Microsoft.Kusto/clusters/databases/scripts@2023-0
 resource agentStockForecastTable 'Microsoft.Kusto/clusters/databases/scripts@2023-08-15' = {
   name: 'create-agent-stock-forecast-table'
   parent: adxDatabase
-  dependsOn: [dailyStockPriceTable]
   properties: {
     scriptContent: '''
 .create-merge table agentStockForecast (

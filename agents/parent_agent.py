@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
-from agents.adx_client import get_price_history, ingest_forecasts, now_utc_iso
+from agents.adx_client import get_all_symbols, get_price_history, ingest_forecasts, now_utc_iso
 from agents.child_agents import CHILD_AGENTS, run_child_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -183,20 +183,13 @@ def run_parent_agent() -> list[dict[str, Any]]:
 
 def _fetch_all_price_history(days: int) -> dict[str, list[dict[str, Any]]]:
     """
-    Fetch price history for all symbols in ADX.
-    We pass an empty list and use a broad query inside adx_client.
+    Fetch price history for all symbols present in ADX for the given window.
     """
-    from agents.adx_client import _get_kusto_client, _database
-
-    # First retrieve the distinct symbol list
-    client = _get_kusto_client()
-    query = f"dailyStockPrice | where priceDate >= ago({days}d) | summarize by symbol"
-    response = client.execute(_database(), query)
-    symbols = [row["symbol"] for row in response.primary_results[0]]
-
+    if days < 1:
+        raise ValueError(f"days must be a positive integer, got {days!r}")
+    symbols = get_all_symbols(days=days)
     if not symbols:
         return {}
-
     return get_price_history(symbols, days=days)
 
 
