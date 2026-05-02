@@ -44,6 +44,9 @@ jobs:
   provision-acr:
     name: Provision Azure Container Registry
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
 
     outputs:
       acr_login_server: ${{ steps.acr.outputs.acrLoginServer }}
@@ -62,13 +65,15 @@ jobs:
 
       - name: Deploy ACR
         id: acr
-        uses: azure/arm-deploy@v2
-        with:
-          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
-          template: ./infra/acr-only.bicep
-          parameters: baseName=${{ vars.BASE_NAME || 'stonksai' }}
-          failOnStdErr: false
+        run: |
+          RESULT=$(az deployment group create \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --template-file ./infra/acr-only.bicep \
+            --parameters baseName="${{ vars.BASE_NAME || 'stonksai' }}" \
+            --query properties.outputs \
+            --output json)
+          echo "acrLoginServer=$(echo "$RESULT" | jq -r '.acrLoginServer.value')" >> "$GITHUB_OUTPUT"
+          echo "acrName=$(echo "$RESULT" | jq -r '.acrName.value')" >> "$GITHUB_OUTPUT"
 
   build-and-push:
     name: Build and push Docker image to ACR
