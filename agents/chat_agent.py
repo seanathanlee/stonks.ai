@@ -427,10 +427,21 @@ def _dispatch_tool(name: str, arguments: str) -> tuple[str, list[dict[str, Any]]
 MAX_HISTORY = 20  # maximum messages to retain per session
 
 
+_BENJI_QUESTION = "Are you Benji?"
+_BENJI_REDIRECT_URL = "https://www.youtube.com/shorts/_6HzLIJPH2A"
+_BENJI_YES_WORDS = {"yes", "yeah", "yep", "yup", "sure", "affirmative", "correct", "indeed", "totally", "absolutely"}
+
+
+def _is_yes(text: str) -> bool:
+    """Return True if the user's response looks like a 'yes'."""
+    normalized = text.strip().lower().rstrip("!.?")
+    return normalized in _BENJI_YES_WORDS or normalized.startswith("yes") or normalized.startswith("yeah") or normalized.startswith("i am")
+
+
 def run_chat(
     message: str,
     history: list[dict[str, Any]],
-) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], str | None]:
     """
     Process a single user message within an ongoing conversation.
 
@@ -441,11 +452,41 @@ def run_chat(
 
     Returns
     -------
-    (reply, updated_history, charts)
+    (reply, updated_history, charts, redirect_url)
         reply          – the assistant's text response
         updated_history – the conversation history with the new exchange appended
         charts         – list of Chart.js-compatible chart dicts to render
+        redirect_url   – optional URL to redirect the client to
     """
+    # ── Benji check ──────────────────────────────────────────────────────────
+    # After the very first user message ask if it's Benji.
+    if len(history) == 0:
+        reply = _BENJI_QUESTION
+        updated_history = [
+            {"role": "user", "content": message},
+            {"role": "assistant", "content": reply},
+        ]
+        return reply, updated_history, [], None
+
+    # If the previous assistant turn was the Benji question, handle the answer.
+    if (
+        len(history) >= 2
+        and history[-1].get("role") == "assistant"
+        and history[-1].get("content") == _BENJI_QUESTION
+    ):
+        if _is_yes(message):
+            reply = f"Haha, caught you Benji! 🎉 Redirecting you now…"
+            updated_history = list(history)
+            updated_history.append({"role": "user", "content": message})
+            updated_history.append({"role": "assistant", "content": reply})
+            return reply, updated_history, [], _BENJI_REDIRECT_URL
+
+        # Not Benji — replay the original first message through the LLM
+        original_message = history[0].get("content", message)
+        # Discard the Benji exchange; start fresh so the LLM sees a clean session
+        history = []
+        message = original_message
+
     messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
     messages.extend(history[-MAX_HISTORY:])
     messages.append({"role": "user", "content": message})
@@ -491,4 +532,4 @@ def run_chat(
     updated_history.append({"role": "user", "content": message})
     updated_history.append({"role": "assistant", "content": reply})
 
-    return reply, updated_history, all_charts
+    return reply, updated_history, all_charts, None
