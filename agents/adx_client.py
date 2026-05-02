@@ -89,7 +89,7 @@ def get_all_symbols(days: int = 30) -> list[str]:
     if days < 1:
         raise ValueError(f"days must be a positive integer, got {days!r}")
     client = _get_kusto_client()
-    query = f"dailyStockPrice | where priceDate >= ago({int(days)}d) | summarize by symbol"
+    query = f"dailyStockPriceMV | where priceDate >= ago({int(days)}d) | summarize by symbol"
     response = client.execute(_database(), query)
     return [row["symbol"] for row in response.primary_results[0]]
 
@@ -109,7 +109,7 @@ def get_price_history(
 
     symbol_list = ", ".join(f'"{s}"' for s in symbols)
     query = f"""
-dailyStockPrice
+dailyStockPriceMV
 | where priceDate >= ago({days}d)
 | where symbol in ({symbol_list})
 | project priceDate, symbol, price
@@ -200,7 +200,7 @@ def get_latest_forecasts(
 
     symbol_filter = f'| where symbol == "{symbol}"' if symbol else ""
     query = f"""
-agentStockForecast
+agentStockForecastMV
 | where reportTime >= ago(7d)
 | where horizon == "{horizon}"
 {symbol_filter}
@@ -236,7 +236,7 @@ def get_agent_comparison(
     """
     horizon_filter = f'| where horizon == "{horizon}"' if horizon else ""
     query = f"""
-agentStockForecast
+agentStockForecastMV
 | where reportTime >= ago(7d)
 | where symbol == "{symbol}"
 {horizon_filter}

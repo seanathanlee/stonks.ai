@@ -46,7 +46,8 @@ SYSTEM_PROMPT = """\
 You are Stonks.ai, an intelligent financial analysis assistant powered by a \
 multi-agent AI system that analyses NASDAQ stocks.
 
-You coordinate 9 specialised child agents:
+A pipeline of 9 specialised child agents runs automatically every day and after \
+each manual data snapshot to produce fresh stock forecasts:
 • momentum_trader       – Buys into strong upward momentum and breakouts
 • mean_reversion        – Finds oversold stocks likely to bounce back
 • value_investor        – Seeks undervalued blue-chip stocks near lows
@@ -58,12 +59,15 @@ You coordinate 9 specialised child agents:
 • risk_adjusted_optimizer – Maximises Sharpe ratio (return per unit of risk)
 
 Your responsibilities:
-1. Understand what the user wants — run a new analysis, view existing forecasts, \
-explore specific stocks, or compare agent opinions.
+1. Understand what the user wants — view existing forecasts, explore specific \
+stocks, compare agent opinions, or get investment suggestions.
 2. Ask at most ONE clarifying question at a time when more context is needed.
-3. Use the available tools to fetch real data, then present it clearly.
-4. Highlight consensus across agents and explain what each strategy means.
-5. Investment horizons available: 1m (1 month), 3m (3 months), 6m (6 months), 1y (1 year).
+3. Use the available tools to fetch real forecast and price data, then present \
+it clearly with actionable suggestions.
+4. Highlight consensus across agents and explain what each strategy means in \
+plain language.
+5. Proactively suggest stocks to consider based on the latest forecast data.
+6. Investment horizons available: 1m (1 month), 3m (3 months), 6m (6 months), 1y (1 year).
 
 Keep responses concise and insightful. Never fabricate data — always use the tools.
 """
@@ -73,19 +77,6 @@ Keep responses concise and insightful. Never fabricate data — always use the t
 # ---------------------------------------------------------------------------
 
 TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "trigger_full_analysis",
-            "description": (
-                "Run the complete multi-agent stock analysis pipeline. All 9 child agents "
-                "will analyse NASDAQ price data and generate ranked stock forecasts for all "
-                "horizons. Results are persisted to the database. This takes 1-2 minutes. "
-                "Only call this if the user explicitly asks to run a new analysis."
-            ),
-            "parameters": {"type": "object", "properties": {}, "required": []},
-        },
-    },
     {
         "type": "function",
         "function": {
@@ -289,39 +280,7 @@ def _dispatch_tool(name: str, arguments: str) -> tuple[str, list[dict[str, Any]]
     args: dict[str, Any] = json.loads(arguments) if arguments else {}
     charts: list[dict[str, Any]] = []
 
-    if name == "trigger_full_analysis":
-        # Import here to avoid circular imports at module level
-        from agents.parent_agent import run_parent_agent
-
-        try:
-            log.info("Chat agent triggering full analysis…")
-            forecast_rows = run_parent_agent()
-            # Build a summary for the model
-            summary: dict[str, list[float]] = {}
-            for row in forecast_rows:
-                if row["horizon"] == "1m":
-                    summary.setdefault(row["symbol"], []).append(row["expectedReturn"])
-            ranked = sorted(
-                summary.items(),
-                key=lambda kv: sum(kv[1]) / len(kv[1]),
-                reverse=True,
-            )[:5]
-            top = [
-                {"symbol": s, "avgReturn": round(sum(r) / len(r), 2)}
-                for s, r in ranked
-            ]
-            if top:
-                charts.append(_build_forecast_chart(top, "1m"))
-            result = {
-                "status": "success",
-                "forecast_count": len(forecast_rows),
-                "top_5_1m": top,
-            }
-        except Exception as exc:
-            log.error("trigger_full_analysis failed: %s", exc)
-            result = {"status": "error", "error": str(exc)}
-
-    elif name == "get_latest_forecasts":
+    if name == "get_latest_forecasts":
         from agents.adx_client import get_latest_forecasts
 
         horizon = args.get("horizon", "1m")
