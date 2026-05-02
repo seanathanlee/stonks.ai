@@ -42,6 +42,9 @@ param adxCapacity int = 1
 @secure()
 param azureOpenAIApiKey string = ''
 
+@description('Container image to run in the Container App. The deploy workflow passes the real ACR image after pushing it; the default placeholder is only used for fully-manual Bicep deployments.')
+param containerImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+
 // ============================================================
 // Azure AI Services (Cognitive Services) account
 // ============================================================
@@ -288,8 +291,9 @@ resource containerAppEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
 
 // ============================================================
 // Container App – FastAPI backend
-// Uses a public placeholder image on first provision; the deploy
-// workflow overwrites it with the real ACR image after pushing.
+// On first provision the deploy workflow pre-creates the ACR,
+// pushes the real image, then passes it via the containerImage
+// parameter — so no placeholder image is ever used.
 // ============================================================
 
 resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
@@ -324,9 +328,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
       containers: [
         {
           name: 'stonksai-api'
-          // Public placeholder image used for initial provisioning.
-          // The deploy workflow replaces this with the real ACR image.
-          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          image: containerImage
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
