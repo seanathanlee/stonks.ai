@@ -81,24 +81,46 @@ def _rows_to_json_stream(rows: list[dict[str, Any]]) -> io.BytesIO:
 # ---------------------------------------------------------------------------
 
 
-def get_all_symbols(days: int = 30) -> list[str]:
+def get_all_symbols(days: int = 30, as_of_date: str | None = None) -> list[str]:
     """
     Return the distinct set of symbols that have price data in ADX
     for the last *days* days.
+
+    Args:
+        days: Number of days to look back.
+        as_of_date: Optional ISO-8601 date (YYYY-MM-DD).  When provided, the
+            look-back window ends at midnight of this date rather than "now".
+            Useful for backfilling historical forecasts.
     """
     if days < 1:
         raise ValueError(f"days must be a positive integer, got {days!r}")
     client = _get_kusto_client()
-    query = f"dailyStockPriceMV | where priceDate >= ago({int(days)}d) | summarize by symbol"
+    if as_of_date is not None:
+        _validate_iso_date(as_of_date, "as_of_date")
+        query = (
+            f"dailyStockPriceMV"
+            f" | where priceDate >= datetime({as_of_date}T00:00:00Z) - {int(days)}d"
+            f"   and priceDate <= datetime({as_of_date}T00:00:00Z)"
+            f" | summarize by symbol"
+        )
+    else:
+        query = f"dailyStockPriceMV | where priceDate >= ago({int(days)}d) | summarize by symbol"
     response = client.execute(_database(), query)
     return [row["symbol"] for row in response.primary_results[0]]
 
 
 def get_price_history(
-    symbols: list[str], days: int = 30
+    symbols: list[str], days: int = 30, as_of_date: str | None = None
 ) -> dict[str, list[dict[str, Any]]]:
     """
     Query the last *days* of daily closing prices for the given symbols.
+
+    Args:
+        symbols: List of stock ticker symbols to query.
+        days: Number of days to look back.
+        as_of_date: Optional ISO-8601 date (YYYY-MM-DD).  When provided, the
+            look-back window ends at midnight of this date rather than "now".
+            Useful for backfilling historical forecasts.
 
     Returns a dict keyed by symbol, each value being a list of records:
         {"date": "2024-01-15", "price": 182.50}
@@ -107,10 +129,21 @@ def get_price_history(
     if not symbols:
         return {}
 
+    if as_of_date is not None:
+        _validate_iso_date(as_of_date, "as_of_date")
+
     symbol_list = ", ".join(f'"{s}"' for s in symbols)
+    if as_of_date is not None:
+        where_clause = (
+            f"priceDate >= datetime({as_of_date}T00:00:00Z) - {int(days)}d"
+            f" and priceDate <= datetime({as_of_date}T00:00:00Z)"
+        )
+    else:
+        where_clause = f"priceDate >= ago({int(days)}d)"
+
     query = f"""
 dailyStockPriceMV
-| where priceDate >= ago({days}d)
+| where {where_clause}
 | where symbol in ({symbol_list})
 | project priceDate, symbol, price
 | order by priceDate asc
