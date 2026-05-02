@@ -13,10 +13,12 @@ Workflow:
 
 Usage:
   python -m agents.evaluation_agent
+  python -m agents.evaluation_agent --date 2025-01-15
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import uuid
 from datetime import date, timedelta, timezone, datetime
@@ -252,4 +254,15 @@ def run_evaluation_agent(today: date | None = None) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    run_evaluation_agent()
+    parser = argparse.ArgumentParser(description="Stonks.ai evaluation agent")
+    parser.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        default=None,
+        help=(
+            "Treat this ISO-8601 date (YYYY-MM-DD) as 'today' when evaluating "
+            "forecasts. Defaults to today's UTC date. Useful for backfilling."
+        ),
+    )
+    args = parser.parse_args()
+    run_evaluation_agent(today=args.date)

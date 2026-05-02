@@ -1,0 +1,75 @@
+---
+# ============================================================
+# Stonks.ai — Snapshot Evaluation Agent (Manual Trigger)
+# ============================================================
+#
+# Triggered manually via workflow_dispatch.  Runs the evaluation
+# agent for each of the last N days (default: 30), treating each
+# calendar day as "today" so that forecasts made 30 days before
+# that day are evaluated and written to the ADX
+# `agentStockEvaluation` table.
+#
+# Use this workflow to:
+#   • Backfill evaluations when the agent has not previously run.
+#   • Re-seed evaluation data after downtime or data loss.
+#
+# Required repository secrets:
+#   ADX_CLUSTER_URI       – ADX cluster URI
+#                           e.g. https://stonksaiadx.eastus.kusto.windows.net
+#   ADX_DATABASE          – ADX database name (default: stonksai)
+#   AZURE_CLIENT_ID       – Service principal / managed identity client ID (OIDC)
+#   AZURE_TENANT_ID       – Azure tenant ID
+#   AZURE_SUBSCRIPTION_ID – Azure subscription ID
+# ============================================================
+
+name: Snapshot Agent Evaluation
+
+"on":
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days to back-fill (default: 30)"
+        required: false
+        default: "30"
+        type: string
+
+permissions:
+  id-token: write   # Required for OIDC login
+  contents: read
+
+jobs:
+  snapshot-evaluation:
+    name: Backfill evaluation snapshot
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run evaluation agent for each day in snapshot window
+        env:
+          ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
+          ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
+        run: |
+          DAYS="${{ inputs.days || '30' }}"
+          for i in $(seq 0 $(( DAYS - 1 ))); do
+            TARGET_DATE=$(date -u -d "${i} days ago" +%Y-%m-%d)
+            echo "--- Evaluating for date: ${TARGET_DATE} ---"
+            python -m agents.evaluation_agent --date "${TARGET_DATE}"
+          done
