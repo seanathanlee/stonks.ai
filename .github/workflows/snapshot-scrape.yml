@@ -1,0 +1,72 @@
+---
+# ============================================================
+# Stonks.ai — Snapshot Stock Price Scraper (Manual Trigger)
+# ============================================================
+#
+# Triggered manually via workflow_dispatch.  Fetches the last
+# 30 days of daily closing prices for every NASDAQ symbol and
+# bulk-ingests them into the Azure Data Explorer
+# `dailyStockPrice` table.
+#
+# Use this workflow to:
+#   • Perform an initial backfill when setting up the cluster.
+#   • Re-seed data after downtime or data loss.
+#
+# Required repository secrets:
+#   ADX_CLUSTER_URI       – ADX cluster URI
+#                           e.g. https://stonksaiadx.eastus.kusto.windows.net
+#   ADX_DATABASE          – ADX database name (default: stonksai)
+#   AZURE_CLIENT_ID       – Service principal / managed identity client ID (OIDC)
+#   AZURE_TENANT_ID       – Azure tenant ID
+#   AZURE_SUBSCRIPTION_ID – Azure subscription ID
+#   AZURE_OPENAI_ENDPOINT – Azure OpenAI endpoint
+#   AZURE_OPENAI_API_KEY  – Azure OpenAI API key
+# ============================================================
+
+name: Snapshot Stock Price Scrape
+
+"on":
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "Number of days to back-fill (default: 30)"
+        required: false
+        default: "30"
+        type: string
+
+permissions:
+  id-token: write   # Required for OIDC login
+  contents: read
+
+jobs:
+  snapshot-scrape:
+    name: Scrape and ingest price snapshot
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run snapshot scraper
+        env:
+          ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
+          ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        run: python -m agents.scraper --mode snapshot --days ${{ inputs.days || '30' }}
