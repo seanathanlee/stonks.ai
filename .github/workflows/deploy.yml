@@ -138,20 +138,31 @@ jobs:
             --name "${BASE_NAME}acr" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
             --query "id" -o tsv 2>/dev/null || true)
-          if [ -n "$ACR_ID" ]; then
-            PRINCIPAL_ID=$(az containerapp show \
-              --name "${BASE_NAME}-api" \
-              --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-              --query "identity.principalId" -o tsv 2>/dev/null || true)
-            if [ -n "$PRINCIPAL_ID" ]; then
-              az role assignment list \
-                --assignee "$PRINCIPAL_ID" \
-                --role "AcrPull" \
-                --scope "$ACR_ID" \
-                --query "[].id" -o tsv 2>/dev/null \
-              | xargs -r -I{} az role assignment delete --ids {} || true
-            fi
+          if [ -z "$ACR_ID" ]; then
+            echo "ACR not found – skipping role assignment cleanup."
+            exit 0
           fi
+          PRINCIPAL_ID=$(az containerapp show \
+            --name "${BASE_NAME}-api" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "identity.principalId" -o tsv 2>/dev/null || true)
+          if [ -z "$PRINCIPAL_ID" ]; then
+            echo "Container App not found – skipping role assignment cleanup."
+            exit 0
+          fi
+          ROLE_IDS=$(az role assignment list \
+            --assignee "$PRINCIPAL_ID" \
+            --role "AcrPull" \
+            --scope "$ACR_ID" \
+            --query "[].id" -o tsv 2>/dev/null || true)
+          if [ -z "$ROLE_IDS" ]; then
+            echo "No existing AcrPull role assignments found – nothing to clean up."
+            exit 0
+          fi
+          while IFS= read -r RA_ID; do
+            echo "Deleting role assignment: $RA_ID"
+            az role assignment delete --ids "$RA_ID"
+          done <<< "$ROLE_IDS"
 
       - name: Deploy Bicep template
         id: bicep
