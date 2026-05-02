@@ -170,6 +170,46 @@ resource dailyStockPriceMVScript 'Microsoft.Kusto/clusters/databases/scripts@202
 }
 
 // ============================================================
+// ADX table: agentStockEvaluation
+//   Columns: symbol (string), forecastReturn (real),
+//            actualReturn (real), forecastRank (int),
+//            actualRank (int), accuracyScore (real),
+//            agentName (string), forecastReportTime (datetime),
+//            reportTime (datetime), runId (string),
+//            horizon (string)
+// ============================================================
+
+resource agentStockEvaluationTable 'Microsoft.Kusto/clusters/databases/scripts@2023-08-15' = {
+  name: 'create-agent-stock-evaluation-table'
+  parent: adxDatabase
+  dependsOn: [agentStockForecastTable]
+  properties: {
+    #disable-next-line use-secure-value-for-secure-inputs
+    scriptContent: '''
+.create-merge table agentStockEvaluation (
+    symbol: string,
+    forecastReturn: real,
+    actualReturn: real,
+    forecastRank: int,
+    actualRank: int,
+    accuracyScore: real,
+    agentName: string,
+    forecastReportTime: datetime,
+    reportTime: datetime,
+    runId: string,
+    horizon: string
+)
+
+.alter-merge table agentStockEvaluation policy retention softdelete = 365d
+
+.create-or-alter table agentStockEvaluation ingestion json mapping 'agentStockEvaluationMapping'
+'[{"column":"symbol","path":"$.symbol","datatype":"string"},{"column":"forecastReturn","path":"$.forecastReturn","datatype":"real"},{"column":"actualReturn","path":"$.actualReturn","datatype":"real"},{"column":"forecastRank","path":"$.forecastRank","datatype":"int"},{"column":"actualRank","path":"$.actualRank","datatype":"int"},{"column":"accuracyScore","path":"$.accuracyScore","datatype":"real"},{"column":"agentName","path":"$.agentName","datatype":"string"},{"column":"forecastReportTime","path":"$.forecastReportTime","datatype":"datetime"},{"column":"reportTime","path":"$.reportTime","datatype":"datetime"},{"column":"runId","path":"$.runId","datatype":"string"},{"column":"horizon","path":"$.horizon","datatype":"string"}]'
+'''
+    continueOnErrors: false
+  }
+}
+
+// ============================================================
 // ADX materialized view: agentStockForecastMV
 //   Deduplicates agentStockForecast by (agentName, symbol,
 //   horizon), retaining the row with the latest reportTime.

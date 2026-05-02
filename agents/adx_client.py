@@ -255,6 +255,130 @@ agentStockForecastMV
     ]
 
 
+_ISO_DATE_RE = __import__("re").compile(r"^\d{4}-\d{2}-\d{2}$")
+_HORIZON_RE = __import__("re").compile(r"^[a-z0-9]{1,4}$")
+
+
+def _validate_iso_date(value: str, name: str) -> None:
+    """Raise ValueError if *value* is not a plain YYYY-MM-DD date string."""
+    if not _ISO_DATE_RE.match(value):
+        raise ValueError(f"{name} must be an ISO-8601 date (YYYY-MM-DD), got {value!r}")
+
+
+def get_forecasts_from_date(
+    target_date: str,
+    horizon: str = "1m",
+) -> list[dict[str, Any]]:
+    """
+    Return all agent forecast rows whose reportTime falls on *target_date* (UTC).
+
+    *target_date* must be an ISO-8601 date string, e.g. "2026-04-02".
+    Returns a list of dicts with keys:
+        reportTime, agentName, symbol, horizon, expectedReturn, rank
+    """
+    _validate_iso_date(target_date, "target_date")
+    if not _HORIZON_RE.match(horizon):
+        raise ValueError(f"horizon must be alphanumeric (max 4 chars), got {horizon!r}")
+    query = f"""
+agentStockForecast
+| where reportTime >= datetime({target_date}T00:00:00Z)
+  and reportTime  <  datetime({target_date}T00:00:00Z) + 1d
+| where horizon == "{horizon}"
+| project reportTime, agentName, symbol, horizon, expectedReturn, rank
+"""
+    client = _get_kusto_client()
+    response = client.execute(_database(), query)
+    results = []
+    for row in response.primary_results[0]:
+        results.append(
+            {
+                "reportTime": row["reportTime"].isoformat()
+                if hasattr(row["reportTime"], "isoformat")
+                else str(row["reportTime"]),
+                "agentName": row["agentName"],
+                "symbol": row["symbol"],
+                "horizon": row["horizon"],
+                "expectedReturn": float(row["expectedReturn"]),
+                "rank": int(row["rank"]),
+            }
+        )
+    return results
+
+
+def get_price_range(
+    symbols: list[str],
+    start_date: str,
+    end_date: str,
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Query daily closing prices for *symbols* between *start_date* and *end_date*
+    (inclusive, ISO-8601 date strings).
+
+    Returns a dict keyed by symbol, each value being a list of records:
+        {"date": "2024-01-15", "price": 182.50}
+    sorted chronologically (oldest first).
+    """
+    if not symbols:
+        return {}
+
+    _validate_iso_date(start_date, "start_date")
+    _validate_iso_date(end_date, "end_date")
+
+    symbol_list = ", ".join(f'"{s}"' for s in symbols)
+    query = f"""
+dailyStockPriceMV
+| where priceDate >= datetime({start_date}T00:00:00Z)
+  and priceDate <= datetime({end_date}T23:59:59Z)
+| where symbol in ({symbol_list})
+| project priceDate, symbol, price
+| order by priceDate asc
+"""
+    client = _get_kusto_client()
+    response = client.execute(_database(), query)
+
+    result: dict[str, list[dict[str, Any]]] = {s: [] for s in symbols}
+    for row in response.primary_results[0]:
+        symbol = row["symbol"]
+        result[symbol].append(
+            {
+                "date": row["priceDate"].strftime("%Y-%m-%d")
+                if hasattr(row["priceDate"], "strftime")
+                else str(row["priceDate"]),
+                "price": float(row["price"]),
+            }
+        )
+    return result
+
+
+def ingest_evaluations(rows: list[dict[str, Any]]) -> None:
+    """
+    Bulk-ingest rows into the `agentStockEvaluation` table.
+
+    Each row must contain:
+        symbol              – stock ticker string
+        forecastReturn      – forecasted % return (float)
+        actualReturn        – realized % return (float)
+        forecastRank        – rank assigned by the forecasting agent (int)
+        actualRank          – rank based on actual returns (int)
+        accuracyScore       – accuracy metric (float)
+        agentName           – name of the forecasting agent (string)
+        forecastReportTime  – ISO-8601 datetime of the original forecast
+        reportTime          – ISO-8601 datetime of this evaluation run
+        runId               – unique ID for this evaluation run (string)
+        horizon             – forecast horizon, e.g. "1m" (string)
+    """
+    if not rows:
+        return
+
+    props = IngestionProperties(
+        database=_database(),
+        table="agentStockEvaluation",
+        data_format=DataFormat.MULTIJSON,
+    )
+    stream = _rows_to_json_stream(rows)
+    _get_ingest_client().ingest_from_stream(stream, ingestion_properties=props)
+
+
 def now_utc_iso() -> str:
     """Return the current UTC time as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()

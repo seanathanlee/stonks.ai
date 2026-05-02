@@ -1,0 +1,67 @@
+---
+# ============================================================
+# Stonks.ai — Daily Agent Stock Evaluation
+# ============================================================
+#
+# Runs every day at 03:00 UTC (after the daily scrape and
+# parent-agent forecast run at 01:00 UTC).
+#
+# For each child agent it:
+#   1. Queries all 1-month horizon forecasts from exactly
+#      30 days ago stored in `agentStockForecast`.
+#   2. Fetches the actual closing prices for those symbols
+#      over the 30-day window from `dailyStockPriceMV`.
+#   3. Computes realized returns, actual ranks, and accuracy
+#      scores (absolute return error + absolute rank error).
+#   4. Writes results to the `agentStockEvaluation` ADX table.
+#
+# Required repository secrets:
+#   ADX_CLUSTER_URI       – ADX cluster URI
+#                           e.g. https://stonksaiadx.eastus.kusto.windows.net
+#   ADX_DATABASE          – ADX database name (default: stonksai)
+#   AZURE_CLIENT_ID       – Service principal / managed identity client ID (OIDC)
+#   AZURE_TENANT_ID       – Azure tenant ID
+#   AZURE_SUBSCRIPTION_ID – Azure subscription ID
+# ============================================================
+
+name: Daily Agent Stock Evaluation
+
+"on":
+  schedule:
+    - cron: "0 3 * * *"   # 03:00 UTC daily (after scrape + forecast at 01:00 UTC)
+  workflow_dispatch:        # allow manual trigger
+
+permissions:
+  id-token: write   # Required for OIDC login
+  contents: read
+
+jobs:
+  evaluate:
+    name: Evaluate agent forecast accuracy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run evaluation agent
+        env:
+          ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
+          ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
+        run: python -m agents.evaluation_agent
