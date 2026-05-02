@@ -60,6 +60,26 @@ resource cognitiveServices 'Microsoft.CognitiveServices/accounts@2023-05-01' = {
 }
 
 // ============================================================
+// Azure OpenAI model deployment: gpt-4o
+// ============================================================
+
+resource gpt4oDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = {
+  name: 'gpt-4o'
+  parent: cognitiveServices
+  sku: {
+    name: 'Standard'
+    capacity: 10
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: 'gpt-4o'
+      version: '2024-11-20'
+    }
+  }
+}
+
+// ============================================================
 // Azure Data Explorer (Kusto) cluster
 // ============================================================
 
