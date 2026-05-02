@@ -11,14 +11,15 @@ Workflow:
 
 Usage:
   python -m agents.parent_agent
+  python -m agents.parent_agent --date 2025-01-15
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from agents.adx_client import get_all_symbols, get_price_history, ingest_forecasts, now_utc_iso
@@ -112,11 +113,24 @@ def _print_summary(
 # ---------------------------------------------------------------------------
 
 
-def run_parent_agent() -> list[dict[str, Any]]:
+def run_parent_agent(as_of_date: date | None = None) -> list[dict[str, Any]]:
     """
     Execute the full multi-agent pipeline and return all forecast rows.
+
+    Args:
+        as_of_date: Optional date to treat as "today" for price history queries
+            and the forecast reportTime.  Defaults to the actual UTC now.
+            Pass a historical date to backfill forecasts.
     """
-    report_time = now_utc_iso()
+    if as_of_date is not None:
+        report_time = datetime(
+            as_of_date.year, as_of_date.month, as_of_date.day,
+            tzinfo=timezone.utc,
+        ).isoformat()
+        as_of_str = as_of_date.isoformat()
+    else:
+        report_time = now_utc_iso()
+        as_of_str = None
 
     # ------------------------------------------------------------------
     # 1. Pull price data from ADX
@@ -124,7 +138,7 @@ def run_parent_agent() -> list[dict[str, Any]]:
     log.info("Fetching all symbols from ADX (last %d days)…", PRICE_HISTORY_DAYS)
     # An empty symbol list causes get_price_history to return all symbols;
     # we query broadly then pass the full dataset to every child agent.
-    stock_data = _fetch_all_price_history(days=PRICE_HISTORY_DAYS)
+    stock_data = _fetch_all_price_history(days=PRICE_HISTORY_DAYS, as_of_date=as_of_str)
 
     if not stock_data:
         log.error(
@@ -181,16 +195,23 @@ def run_parent_agent() -> list[dict[str, Any]]:
     return all_forecast_rows
 
 
-def _fetch_all_price_history(days: int) -> dict[str, list[dict[str, Any]]]:
+def _fetch_all_price_history(
+    days: int, as_of_date: str | None = None
+) -> dict[str, list[dict[str, Any]]]:
     """
     Fetch price history for all symbols present in ADX for the given window.
+
+    Args:
+        days: Number of days to look back.
+        as_of_date: Optional ISO-8601 date string.  When provided, the window
+            ends at midnight of this date rather than "now".
     """
     if days < 1:
         raise ValueError(f"days must be a positive integer, got {days!r}")
-    symbols = get_all_symbols(days=days)
+    symbols = get_all_symbols(days=days, as_of_date=as_of_date)
     if not symbols:
         return {}
-    return get_price_history(symbols, days=days)
+    return get_price_history(symbols, days=days, as_of_date=as_of_date)
 
 
 # ---------------------------------------------------------------------------
@@ -198,4 +219,17 @@ def _fetch_all_price_history(days: int) -> dict[str, list[dict[str, Any]]]:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    run_parent_agent()
+    parser = argparse.ArgumentParser(description="Stonks.ai parent (orchestrator) agent")
+    parser.add_argument(
+        "--date",
+        type=date.fromisoformat,
+        default=None,
+        help=(
+            "Treat this ISO-8601 date (YYYY-MM-DD) as 'today' when generating "
+            "forecasts.  Price history is bounded to the 30-day window ending on "
+            "this date and reportTime is set to midnight UTC of this date. "
+            "Defaults to the actual current UTC time. Useful for backfilling."
+        ),
+    )
+    args = parser.parse_args()
+    run_parent_agent(as_of_date=args.date)
