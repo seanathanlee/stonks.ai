@@ -1,0 +1,63 @@
+---
+# ============================================================
+# Stonks.ai — Daily Stock Price Scraper
+# ============================================================
+#
+# Runs every day at 01:00 UTC (after US market close) and
+# ingests the latest closing price for every NASDAQ symbol
+# into the Azure Data Explorer `dailyStockPrice` table.
+#
+# Required repository secrets:
+#   ADX_CLUSTER_URI       – ADX cluster URI
+#                           e.g. https://stonksaiadx.eastus.kusto.windows.net
+#   ADX_DATABASE          – ADX database name (default: stonksai)
+#   AZURE_CLIENT_ID       – Service principal / managed identity client ID (OIDC)
+#   AZURE_TENANT_ID       – Azure tenant ID
+#   AZURE_SUBSCRIPTION_ID – Azure subscription ID
+#   AZURE_OPENAI_ENDPOINT – Azure OpenAI endpoint
+#   AZURE_OPENAI_API_KEY  – Azure OpenAI API key
+# ============================================================
+
+name: Daily Stock Price Scrape
+
+"on":
+  schedule:
+    - cron: "0 1 * * *"   # 01:00 UTC daily
+  workflow_dispatch:        # allow manual trigger
+
+permissions:
+  id-token: write   # Required for OIDC login
+  contents: read
+
+jobs:
+  daily-scrape:
+    name: Scrape and ingest daily prices
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run daily scraper
+        env:
+          ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
+          ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        run: python -m agents.scraper --mode daily

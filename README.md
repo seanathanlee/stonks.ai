@@ -1,8 +1,8 @@
 # stonks.ai — Agentic DevOps Sample
 
-An end-to-end sample that shows how to build, containerize, and deploy an **AI agent** to **Azure Container Apps** using GitHub Actions.
+An end-to-end sample that shows how to build, containerize, and deploy a **multi-agent AI system** to **Azure** using GitHub Actions.
 
-The agent (`agents/agent.py`) uses **Azure OpenAI** (GPT-4o) with function-calling tools to answer stock-market questions. The same pattern can be adapted to any agentic workload.
+The system scrapes NASDAQ stock prices daily, stores them in **Azure Data Explorer (Kusto)**, and runs **9 specialised child agents** (each with a distinct investment philosophy) through a **parent orchestrator agent** to produce ranked stock picks across four time horizons. All forecasts are persisted back to ADX for querying and analysis.
 
 ---
 
@@ -11,20 +11,60 @@ The agent (`agents/agent.py`) uses **Azure OpenAI** (GPT-4o) with function-calli
 ```
 stonks.ai/
 ├── agents/
-│   └── agent.py          # AI agent – Azure OpenAI + tool-calling
+│   ├── agent.py           # Original single AI agent (Azure OpenAI + tool-calling)
+│   ├── adx_client.py      # ADX query + ingestion wrapper
+│   ├── scraper.py         # NASDAQ symbol list + price fetcher
+│   ├── child_agents.py    # 9 child agent definitions + shared runner
+│   └── parent_agent.py    # Orchestrator: reads ADX, fans out, writes forecasts
 ├── infra/
-│   ├── main.bicep         # Root Bicep template (ACR + Container Apps)
-│   ├── main.bicepparam    # Default parameter values
-│   └── modules/
-│       ├── container-registry.bicep
-│       └── container-app.bicep
+│   ├── main.bicep         # Root Bicep template (AI Services + ADX cluster/DB/tables)
+│   └── main.bicepparam    # Default parameter values
 ├── .github/
 │   └── workflows/
-│       └── deploy.yml     # CI/CD pipeline
+│       ├── deploy.yml          # CI/CD pipeline (infrastructure deploy)
+│       ├── daily-scrape.yml    # Scheduled daily price ingestion (01:00 UTC)
+│       └── snapshot-scrape.yml # Manual 30-day backfill trigger
 ├── Dockerfile
 ├── requirements.txt
 ├── .env.example
 └── README.md
+```
+
+---
+
+## Architecture
+
+```
+GitHub Actions
+    │
+    ├─► deploy.yml
+    │       └─► Azure AI Services (Azure OpenAI GPT-4o)
+    │       └─► Azure Data Explorer cluster (stonksaiadx)
+    │               ├── database: stonksai
+    │               │       ├── table: dailyStockPrice
+    │               │       └── table: agentStockForecast
+    │
+    ├─► daily-scrape.yml  (runs 01:00 UTC every day)
+    │       └─► agents/scraper.py --mode daily
+    │               └─► Yahoo Finance API  ──► ADX dailyStockPrice
+    │
+    ├─► snapshot-scrape.yml  (manual trigger)
+    │       └─► agents/scraper.py --mode snapshot
+    │               └─► Yahoo Finance API (30 days)  ──► ADX dailyStockPrice
+    │
+    └─► agents/parent_agent.py  (run on-demand or on a schedule)
+            ├─► ADX dailyStockPrice  ──► stock data (30-day window)
+            ├─► 9 child agents (concurrent)
+            │       ├── momentum_trader
+            │       ├── mean_reversion
+            │       ├── value_investor
+            │       ├── growth_investor
+            │       ├── volatility_hunter
+            │       ├── sector_rotation
+            │       ├── technical_analyst
+            │       ├── contrarian_investor
+            │       └── risk_adjusted_optimizer
+            └─► ADX agentStockForecast  (5 picks × 4 horizons × 9 agents)
 ```
 
 ---
@@ -55,14 +95,25 @@ stonks.ai/
 
    ```bash
    cp .env.example .env
-   # Edit .env and fill in your Azure OpenAI values
+   # Edit .env and fill in your Azure OpenAI and ADX values
    ```
 
-3. **Run the agent locally**
+3. **Run the original single agent**
 
    ```bash
-   source .env  # or use python-dotenv
    python -m agents.agent "What is the current price of AAPL and its 5-day moving average?"
+   ```
+
+4. **Backfill 30 days of price data (first-time setup)**
+
+   ```bash
+   python -m agents.scraper --mode snapshot
+   ```
+
+5. **Run the multi-agent orchestrator**
+
+   ```bash
+   python -m agents.parent_agent
    ```
 
 ---
@@ -78,12 +129,11 @@ az login
 # Create a resource group
 az group create --name rg-stonksai --location eastus
 
-# Deploy the Bicep template
+# Deploy the Bicep template (provisions AI Services + ADX cluster + tables)
 az deployment group create \
   --resource-group rg-stonksai \
   --template-file infra/main.bicep \
-  --parameters infra/main.bicepparam \
-  --parameters azureOpenAiApiKey="<your-key>"
+  --parameters infra/main.bicepparam
 ```
 
 ### 2 — Configure GitHub Actions (one-time)
@@ -91,7 +141,6 @@ az deployment group create \
 Set up **OIDC federated credentials** so the workflow can authenticate to Azure without long-lived secrets:
 
 ```bash
-# Create a service principal
 az ad sp create-for-rbac \
   --name sp-stonksai-gh \
   --role contributor \
@@ -107,9 +156,10 @@ Then add the following **repository secrets** in GitHub → Settings → Secrets
 | `AZURE_TENANT_ID` | Azure tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
 | `AZURE_RESOURCE_GROUP` | `rg-stonksai` |
-| `ACR_LOGIN_SERVER` | e.g. `stonksaiacr.azurecr.io` |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
+| `ADX_CLUSTER_URI` | ADX cluster URI, e.g. `https://stonksaiadx.eastus.kusto.windows.net` |
+| `ADX_DATABASE` | ADX database name (`stonksai`) |
 
 And optionally add these **repository variables**:
 
@@ -118,27 +168,41 @@ And optionally add these **repository variables**:
 | `BASE_NAME` | `stonksai` |
 | `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` |
 
-### 3 — Deploy
+### 3 — Seed historical data (one-time)
 
-Push to `main` (or trigger the workflow manually). The pipeline will:
+After the infrastructure is deployed, trigger the snapshot workflow to backfill 30 days of price data:
 
-1. Build the Docker image and push it to ACR.
-2. Deploy / update the Bicep-managed infrastructure.
-3. Update the Container App with the new image tag.
+GitHub → Actions → **Snapshot Stock Price Scrape** → **Run workflow**
+
+### 4 — Automated daily scraping
+
+The `daily-scrape.yml` workflow runs automatically at **01:00 UTC** every day, fetching the previous day's closing prices for all NASDAQ symbols and ingesting them into ADX.
+
+You can also trigger it manually from the GitHub Actions tab.
 
 ---
 
-## Architecture
+## ADX Schema Reference
 
-```
-GitHub Actions
-    │
-    ├─► Azure Container Registry (ACR)   ← Docker image
-    │
-    └─► Azure Container Apps
-            └─► stonksai-agent container
-                    └─► Azure OpenAI (GPT-4o)
-```
+### `dailyStockPrice`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `reportTime` | datetime | When the row was written |
+| `symbol` | string | Stock ticker (e.g. `AAPL`) |
+| `price` | real | Closing price |
+| `priceDate` | datetime | Trading date for the price |
+
+### `agentStockForecast`
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `reportTime` | datetime | When the agent pipeline ran |
+| `agentName` | string | Child agent name |
+| `symbol` | string | Stock ticker |
+| `horizon` | string | `"1m"`, `"3m"`, `"6m"`, or `"1y"` |
+| `expectedReturn` | real | Forecasted percentage return |
+| `rank` | int | Rank within this agent+horizon (1 = best) |
 
 ---
 
