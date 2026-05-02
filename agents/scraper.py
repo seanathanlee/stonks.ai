@@ -4,8 +4,10 @@ Fetches NASDAQ stock symbols and their daily closing prices, then ingests
 the data into the Azure Data Explorer `dailyStockPrice` table.
 
 Usage:
-  python -m agents.scraper --mode daily     # today's price for all symbols
-  python -m agents.scraper --mode snapshot  # last 30 days for all symbols
+  python -m agents.scraper --mode daily               # today's price for all symbols
+  python -m agents.scraper --mode snapshot            # last 30 days for all symbols
+  python -m agents.scraper --mode snapshot --days 7   # last 7 days for all symbols
+  python -m agents.scraper --mode snapshot --date 2025-01-15  # single date
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from __future__ import annotations
 import argparse
 import logging
 import time
-from datetime import date, timezone, datetime
+from datetime import date, timedelta, timezone, datetime
 
 import requests
 from bs4 import BeautifulSoup
@@ -125,6 +127,37 @@ def fetch_price_history(
         return []
 
 
+def fetch_price_on_date(symbol: str, target_date: date) -> float | None:
+    """
+    Fetch the closing price for *symbol* on *target_date* from Yahoo Finance.
+    Returns the price as a float, or None if no data is available (e.g. market
+    was closed on that day).
+    """
+    start_dt = datetime(target_date.year, target_date.month, target_date.day, tzinfo=timezone.utc)
+    end_dt = start_dt + timedelta(days=1)
+    url = (
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+        f"?interval=1d&period1={int(start_dt.timestamp())}&period2={int(end_dt.timestamp())}"
+    )
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        result = data["chart"]["result"][0]
+        timestamps = result["timestamp"]
+        closes = result["indicators"]["quote"][0]["close"]
+        for ts, price in zip(timestamps, closes):
+            if price is None:
+                continue
+            trade_date = datetime.fromtimestamp(ts, tz=timezone.utc).date()
+            if trade_date == target_date:
+                return float(price)
+        return None
+    except Exception as exc:
+        log.warning("Could not fetch price for %s on %s: %s", symbol, target_date, exc)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Scraper modes
 # ---------------------------------------------------------------------------
@@ -181,6 +214,31 @@ def run_snapshot(symbols: list[str], days: int = SNAPSHOT_DAYS) -> None:
     log.info("Snapshot ingest complete.")
 
 
+def run_snapshot_date(symbols: list[str], target_date: date) -> None:
+    """Fetch the closing price for every symbol on *target_date* and ingest into ADX."""
+    report_time = now_utc_iso()
+    rows: list[dict] = []
+
+    for i, symbol in enumerate(symbols, start=1):
+        price = fetch_price_on_date(symbol, target_date)
+        if price is not None:
+            rows.append(
+                {
+                    "reportTime": report_time,
+                    "symbol": symbol,
+                    "price": price,
+                    "priceDate": target_date.isoformat(),
+                }
+            )
+        if i % 100 == 0:
+            log.info("Progress: %d / %d symbols processed", i, len(symbols))
+        time.sleep(REQUEST_DELAY_SECONDS)
+
+    log.info("Ingesting %d price rows into ADX (snapshot date mode, date=%s)", len(rows), target_date)
+    ingest_daily_prices(rows)
+    log.info("Snapshot date ingest complete.")
+
+
 # ---------------------------------------------------------------------------
 # CLI entry-point
 # ---------------------------------------------------------------------------
@@ -192,13 +250,22 @@ def main() -> None:
         "--mode",
         choices=["daily", "snapshot"],
         required=True,
-        help="'daily' ingests today's prices; 'snapshot' ingests the last 30 days.",
+        help="'daily' ingests today's prices; 'snapshot' ingests the last N days.",
     )
     parser.add_argument(
         "--days",
         type=int,
         default=SNAPSHOT_DAYS,
-        help="Number of days to back-fill in snapshot mode (default: 30).",
+        help="Number of days to back-fill in snapshot mode (default: 30). Ignored when --date is set.",
+    )
+    parser.add_argument(
+        "--date",
+        type=str,
+        default=None,
+        help=(
+            "Target date in YYYY-MM-DD format for snapshot mode. "
+            "When provided, only prices for that single date are fetched and ingested."
+        ),
     )
     args = parser.parse_args()
 
@@ -210,7 +277,11 @@ def main() -> None:
     if args.mode == "daily":
         run_daily(symbols)
     else:
-        run_snapshot(symbols, days=args.days)
+        if args.date:
+            target_date = date.fromisoformat(args.date)
+            run_snapshot_date(symbols, target_date)
+        else:
+            run_snapshot(symbols, days=args.days)
 
 
 if __name__ == "__main__":
