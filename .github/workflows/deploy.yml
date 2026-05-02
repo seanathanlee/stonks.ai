@@ -168,7 +168,17 @@ jobs:
 
       - name: Inject Container App URL into frontend
         run: |
-          FQDN="${{ needs.deploy-infrastructure.outputs.container_app_fqdn }}"
+          # Query the FQDN directly from Azure to avoid GitHub Actions masking
+          # inter-job outputs whose values contain a secret substring.
+          FQDN=$(az containerapp show \
+            --name "${{ vars.BASE_NAME || 'stonksai' }}-api" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --query "properties.configuration.ingress.fqdn" \
+            --output tsv)
+          if [ -z "$FQDN" ] || [ "$FQDN" = "null" ]; then
+            echo "ERROR: Could not retrieve Container App FQDN." >&2
+            exit 1
+          fi
           API_URL="https://${FQDN}"
           echo "Setting API_BASE to ${API_URL}"
           sed -i "s|const API_BASE = '';|const API_BASE = '${API_URL}';|" frontend/index.html
