@@ -134,6 +134,7 @@ class ChatResponse(BaseModel):
     reply: str
     charts: list[dict[str, Any]] = []
     session_id: str
+    redirect_url: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -152,14 +153,14 @@ async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     history = _get_or_create_session(req.session_id)
 
     try:
-        reply, updated_history, charts = run_chat(req.message, history)
+        reply, updated_history, charts, redirect_url = run_chat(req.message, history)
     except Exception as exc:
         log.exception("Chat agent error for session %s", req.session_id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     _sessions[req.session_id] = updated_history
 
-    return ChatResponse(reply=reply, charts=charts, session_id=req.session_id)
+    return ChatResponse(reply=reply, charts=charts, session_id=req.session_id, redirect_url=redirect_url)
 
 
 # ---------------------------------------------------------------------------

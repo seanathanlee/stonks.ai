@@ -493,6 +493,9 @@ async function sendMessage() {
     } else {
       const data = await res.json();
       appendBotMessage(data.reply, data.charts || []);
+      if (data.redirect_url) {
+        setTimeout(() => { window.location.href = data.redirect_url; }, 1500);
+      }
     }
   } catch (err) {
     removeTypingIndicator(typingId);
