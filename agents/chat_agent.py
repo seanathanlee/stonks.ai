@@ -48,22 +48,35 @@ multi-agent AI system that analyses NASDAQ stocks.
 
 A pipeline of 9 specialised child agents runs automatically every day and after \
 each manual data snapshot to produce fresh stock forecasts:
-• momentum_trader       – Buys into strong upward momentum and breakouts
-• mean_reversion        – Finds oversold stocks likely to bounce back
-• value_investor        – Seeks undervalued blue-chip stocks near lows
-• growth_investor       – Targets high-growth companies making new highs
-• volatility_hunter     – Seeks large price swings for outsized moves
-• sector_rotation       – Rotates into outperforming sectors
-• technical_analyst     – Reads chart patterns and technical setups
-• contrarian_investor   – Buys beaten-down names against the crowd
-• risk_adjusted_optimizer – Maximises Sharpe ratio (return per unit of risk)
+• momentum_trader         – Buys into strong upward momentum and breakouts; \
+tracks relative strength and rate of change.
+• mean_reversion          – Finds stocks that have fallen below their 30-day \
+average and are likely to bounce back.
+• value_investor          – Seeks undervalued blue-chip stocks near multi-month \
+lows with low volatility.
+• growth_investor         – Targets high-growth technology, biotech, and \
+consumer names making new highs.
+• volatility_hunter       – Seeks large intraday or day-over-day price swings \
+for outsized profit potential.
+• sector_rotation         – Rotates into outperforming NASDAQ sectors by \
+tracking cross-sector price momentum.
+• technical_analyst       – Reads cup-and-handle patterns, ascending triangles, \
+golden crosses, and other chart setups.
+• contrarian_investor     – Buys beaten-down names against the crowd when \
+fundamentals remain strong.
+• risk_adjusted_optimizer – Maximises Sharpe ratio, balancing expected return \
+against recent price volatility.
+
+Agent evaluations measure how accurately each agent's forecasts matched actual \
+stock returns (lower accuracy score = more accurate). Use get_agent_evaluations \
+to surface this data with visualisations.
 
 Your responsibilities:
 1. Understand what the user wants — view existing forecasts, explore specific \
-stocks, compare agent opinions, or get investment suggestions.
+stocks, compare agent opinions, check agent accuracy, or get investment suggestions.
 2. Ask at most ONE clarifying question at a time when more context is needed.
-3. Use the available tools to fetch real forecast and price data, then present \
-it clearly with actionable suggestions.
+3. Use the available tools to fetch real forecast, price, and evaluation data, \
+then present it clearly with actionable suggestions.
 4. Highlight consensus across agents and explain what each strategy means in \
 plain language.
 5. Proactively suggest stocks to consider based on the latest forecast data.
@@ -146,6 +159,34 @@ TOOLS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["symbol"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_agent_evaluations",
+            "description": (
+                "Retrieve accuracy evaluation metrics for each of the 9 child agents, "
+                "showing how well their 1-month forecasts matched actual stock returns. "
+                "The accuracy score is lower-is-better: it measures the combined "
+                "absolute error in both forecasted return and stock rank. "
+                "Use this to identify which agents have been most accurate recently."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "horizon": {
+                        "type": "string",
+                        "enum": ["1m", "3m", "6m", "1y"],
+                        "description": "Forecast horizon to evaluate (default: 1m).",
+                    },
+                    "days": {
+                        "type": "integer",
+                        "description": "Days of evaluation history to include (default: 30, max: 90).",
+                    },
+                },
+                "required": [],
             },
         },
     },
@@ -268,9 +309,32 @@ def _build_agent_comparison_chart(
     }
 
 
-# ---------------------------------------------------------------------------
-# Tool dispatch
-# ---------------------------------------------------------------------------
+def _build_evaluation_chart(
+    evaluations: list[dict[str, Any]], horizon: str
+) -> dict[str, Any]:
+    """Horizontal bar chart: per-agent accuracy scores (lower = more accurate)."""
+    agents = [e["agentName"].replace("_", " ").title() for e in evaluations]
+    scores = [e["avgAccuracyScore"] for e in evaluations]
+    return {
+        "id": f"eval_{horizon}_{uuid.uuid4().hex[:8]}",
+        "type": "bar",
+        "title": f"Agent Accuracy Scores — {horizon} Horizon (lower = more accurate)",
+        "indexAxis": "y",
+        "labels": agents,
+        "datasets": [
+            {
+                "label": "Avg Accuracy Score",
+                "data": scores,
+                "backgroundColor": [
+                    _CHART_COLORS[i % len(_CHART_COLORS)] for i in range(len(scores))
+                ],
+                "borderRadius": 4,
+            }
+        ],
+    }
+
+
+
 
 
 def _dispatch_tool(name: str, arguments: str) -> tuple[str, list[dict[str, Any]]]:
@@ -335,6 +399,20 @@ def _dispatch_tool(name: str, arguments: str) -> tuple[str, list[dict[str, Any]]
             except Exception as exc:
                 log.error("compare_agent_forecasts failed: %s", exc)
                 result = {"error": str(exc)}
+
+    elif name == "get_agent_evaluations":
+        from agents.adx_client import get_agent_evaluations
+
+        horizon = args.get("horizon", "1m")
+        days = min(int(args.get("days", 30)), 90)
+        try:
+            evaluations = get_agent_evaluations(horizon=horizon, days=days)
+            if evaluations:
+                charts.append(_build_evaluation_chart(evaluations, horizon))
+            result = {"evaluations": evaluations, "horizon": horizon, "days": days}
+        except Exception as exc:
+            log.error("get_agent_evaluations failed: %s", exc)
+            result = {"error": str(exc)}
 
     else:
         result = {"error": f"Unknown tool: {name}"}
