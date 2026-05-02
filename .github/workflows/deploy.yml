@@ -1,20 +1,25 @@
 ---
 # ============================================================
-# Stonks.ai — Deploy Azure infrastructure + frontend
+# Stonks.ai — Deploy Azure infrastructure + backend + frontend
 # ============================================================
 #
 # This workflow:
 #   1. Deploys the Azure infrastructure (AI Services, ADX,
-#      Static Web App) using the Bicep template in infra/.
-#   2. Deploys the frontend/ directory to Azure Static Web Apps
+#      Container Registry, Container App, Static Web App) using
+#      the Bicep template in infra/.
+#   2. Builds the Docker image and pushes it to ACR, then updates
+#      the Container App to serve the FastAPI backend.
+#   3. Injects the Container App URL into the frontend and deploys
+#      the frontend/ directory to Azure Static Web Apps
 #      (served at skewthis.com).
 #
 # Required repository secrets:
-#   AZURE_CLIENT_ID       – Service principal / managed identity
-#                           client ID (OIDC)
-#   AZURE_TENANT_ID       – Azure tenant ID
-#   AZURE_SUBSCRIPTION_ID – Azure subscription ID
-#   AZURE_RESOURCE_GROUP  – Name of the target resource group
+#   AZURE_CLIENT_ID          – Service principal / managed identity
+#                              client ID (OIDC)
+#   AZURE_TENANT_ID          – Azure tenant ID
+#   AZURE_SUBSCRIPTION_ID    – Azure subscription ID
+#   AZURE_RESOURCE_GROUP     – Name of the target resource group
+#   AZURE_OPENAI_API_KEY     – Azure OpenAI API key
 #
 # Optional repository variables (with defaults):
 #   BASE_NAME     – defaults to stonksai
@@ -38,6 +43,12 @@ jobs:
     name: Deploy Azure infrastructure
     runs-on: ubuntu-latest
 
+    outputs:
+      acr_login_server: ${{ steps.bicep.outputs.acrLoginServer }}
+      acr_name: ${{ steps.bicep.outputs.acrName }}
+      container_app_name: ${{ steps.bicep.outputs.containerAppName }}
+      container_app_fqdn: ${{ steps.bicep.outputs.containerAppFqdn }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -50,6 +61,7 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Deploy Bicep template
+        id: bicep
         uses: azure/arm-deploy@v2
         with:
           subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
@@ -58,12 +70,16 @@ jobs:
           parameters: >
             baseName=${{ vars.BASE_NAME || 'stonksai' }}
             swaLocation=${{ vars.SWA_LOCATION || 'centralus' }}
+            azureOpenAIApiKey=${{ secrets.AZURE_OPENAI_API_KEY }}
           failOnStdErr: false
 
-  deploy-frontend:
-    name: Deploy frontend to Azure Static Web Apps
+  deploy-backend:
+    name: Build and deploy FastAPI backend to Container App
     runs-on: ubuntu-latest
     needs: deploy-infrastructure
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
 
     steps:
       - name: Checkout repository
@@ -76,10 +92,54 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "${{ needs.deploy-infrastructure.outputs.acr_name }}"
+
+      - name: Build and push Docker image
+        run: |
+          ACR="${{ needs.deploy-infrastructure.outputs.acr_login_server }}"
+          IMAGE="${ACR}/stonksai:latest"
+          docker build --tag "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Update Container App with new image
+        run: |
+          az containerapp update \
+            --name "${{ needs.deploy-infrastructure.outputs.container_app_name }}" \
+            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
+            --image "${{ needs.deploy-infrastructure.outputs.acr_login_server }}/stonksai:latest"
+
+  deploy-frontend:
+    name: Deploy frontend to Azure Static Web Apps
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-infrastructure
+      - deploy-backend
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Inject Container App URL into frontend
+        run: |
+          FQDN="${{ needs.deploy-infrastructure.outputs.container_app_fqdn }}"
+          API_URL="https://${FQDN}"
+          echo "Setting API_BASE to ${API_URL}"
+          sed -i "s|const API_BASE = '';|const API_BASE = '${API_URL}';|" frontend/index.html
+
       - name: Get Static Web App deployment token
         id: swa-token
         run: |
-          set -euo pipefail
           TOKEN=$(az staticwebapp secrets list \
             --name "${{ vars.BASE_NAME || 'stonksai' }}-web" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
