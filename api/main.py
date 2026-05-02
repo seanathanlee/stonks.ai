@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -43,6 +44,24 @@ limiter = Limiter(key_func=get_remote_address, storage_uri="memory://")
 app = FastAPI(title="Stonks.ai", version="1.0.0")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Allow cross-origin requests from the configured origins.
+# CORS_ORIGINS is a comma-separated list of allowed origins; defaults to the
+# wildcard only when the env var is not set (e.g. local development).
+_raw_cors = os.environ.get("CORS_ORIGINS", "")
+_cors_origins: list[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()] or ["*"]
+if _cors_origins == ["*"]:
+    log.warning(
+        "CORS_ORIGINS is not set — allowing all origins. "
+        "Set CORS_ORIGINS to a comma-separated list of allowed origins in production."
+    )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 # Serve the frontend directory as static files
 _FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
