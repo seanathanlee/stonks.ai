@@ -319,6 +319,11 @@
 // ── Session ────────────────────────────────────────────────────────────────
 const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2, 11);
 
+// ── Rate-limit constants ───────────────────────────────────────────────────
+const MAX_MESSAGE_LENGTH = 2000;
+const SEND_COOLDOWN_MS   = 1000; // minimum ms between sends
+let   _lastSendTime      = 0;
+
 // ── Elements ───────────────────────────────────────────────────────────────
 const messagesEl   = document.getElementById('messages');
 const inputEl      = document.getElementById('user-input');
@@ -351,6 +356,22 @@ async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text) return;
 
+  // Client-side cooldown guard
+  const now = Date.now();
+  if (now - _lastSendTime < SEND_COOLDOWN_MS) {
+    sendBtn.disabled = true;
+    setTimeout(() => { sendBtn.disabled = false; }, SEND_COOLDOWN_MS - (now - _lastSendTime));
+    return;
+  }
+
+  // Enforce message length cap before sending
+  if (text.length > MAX_MESSAGE_LENGTH) {
+    appendBotMessage(`⚠️ Message is too long (max ${MAX_MESSAGE_LENGTH} characters).`, []);
+    return;
+  }
+
+  _lastSendTime = now;
+
   // Hide suggestions after first interaction
   suggestionsEl.style.display = 'none';
 
@@ -372,7 +393,11 @@ async function sendMessage() {
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      appendBotMessage(`⚠️ Error: ${err.detail || 'Something went wrong.'}`, []);
+      if (res.status === 429) {
+        appendBotMessage(`⚠️ Too many requests — please wait a moment before trying again.`, []);
+      } else {
+        appendBotMessage(`⚠️ Error: ${err.detail || 'Something went wrong.'}`, []);
+      }
     } else {
       const data = await res.json();
       appendBotMessage(data.reply, data.charts || []);

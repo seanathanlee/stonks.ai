@@ -11,21 +11,38 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Rate limiter setup
+#
+# Uses an in-memory sliding-window store. This is sufficient for single-
+# instance deployments. For multi-instance / production environments replace
+# storage_uri with a Redis URL, e.g.:
+#   storage_uri = os.environ.get("REDIS_URL", "memory://")
+# ---------------------------------------------------------------------------
+
+limiter = Limiter(key_func=get_remote_address, storage_uri="memory://")
 
 # ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Stonks.ai", version="1.0.0")
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Serve the frontend directory as static files
 _FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -62,8 +79,16 @@ def _get_or_create_session(session_id: str) -> list[dict[str, Any]]:
 
 
 class ChatRequest(BaseModel):
-    session_id: str = Field(..., description="Client-generated session UUID.")
-    message: str = Field(..., min_length=1, description="User message text.")
+    session_id: str = Field(..., min_length=1, max_length=128, description="Client-generated session UUID.")
+    message: str = Field(..., min_length=1, max_length=2000, description="User message text.")
+
+    @field_validator("session_id")
+    @classmethod
+    def _validate_session_id(cls, v: str) -> str:
+        # Only allow alphanumeric characters, hyphens, and underscores
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", v):
+            raise ValueError("session_id contains invalid characters")
+        return v
 
 
 class ChartDataset(BaseModel):
@@ -98,7 +123,8 @@ class ChatResponse(BaseModel):
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest) -> ChatResponse:
+@limiter.limit("10/minute")
+async def chat(req: ChatRequest, request: Request) -> ChatResponse:
     """
     Process a user message and return the assistant reply plus optional charts.
     """
@@ -123,5 +149,6 @@ async def chat(req: ChatRequest) -> ChatResponse:
 
 
 @app.get("/api/health")
-async def health() -> dict[str, str]:
+@limiter.limit("60/minute")
+async def health(request: Request) -> dict[str, str]:
     return {"status": "ok"}

@@ -8,3 +8,4 @@ azure-kusto-data>=4.4.0
 azure-kusto-ingest>=4.4.0
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
+slowapi>=0.1.9
