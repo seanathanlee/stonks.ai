@@ -172,7 +172,7 @@ def run_child_agent(
         )
         choice = response.choices[0]
 
-        if choice.finish_reason == "tool_calls":
+        if choice.message.tool_calls:
             tool_call = choice.message.tool_calls[0]
             args = json.loads(tool_call.function.arguments)
             picks = args.get("picks", [])
