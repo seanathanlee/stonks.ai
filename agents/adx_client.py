@@ -149,6 +149,7 @@ def ingest_daily_prices(rows: list[dict[str, Any]]) -> None:
         database=_database(),
         table="dailyStockPrice",
         data_format=DataFormat.MULTIJSON,
+        ingestion_mapping_reference="dailyStockPriceMapping",
     )
     stream = _rows_to_json_stream(rows)
     _get_ingest_client().ingest_from_stream(stream, ingestion_properties=props)
@@ -173,6 +174,7 @@ def ingest_forecasts(rows: list[dict[str, Any]]) -> None:
         database=_database(),
         table="agentStockForecast",
         data_format=DataFormat.MULTIJSON,
+        ingestion_mapping_reference="agentStockForecastMapping",
     )
     stream = _rows_to_json_stream(rows)
     _get_ingest_client().ingest_from_stream(stream, ingestion_properties=props)
