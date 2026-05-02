@@ -12,8 +12,6 @@
 # Required repository secrets:
 #   AZURE_CLIENT_ID       – Service principal / managed identity
 #                           client ID (OIDC)
-#   AZURE_TENANT_ID       – Azure tenant ID
-#   AZURE_SUBSCRIPTION_ID – Azure subscription ID
 #   AZURE_RESOURCE_GROUP  – Name of the target resource group
 #   ACR_LOGIN_SERVER      – e.g. stonksaiacr.azurecr.io
 #   AZURE_OPENAI_ENDPOINT – Azure OpenAI endpoint URL
@@ -54,8 +52,8 @@ jobs:
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          tenant-id: 1cc1d936-7230-4613-8b85-133580a285b8
+          subscription-id: 14d4aeee-9190-4f1b-b41a-56d9d4617564
 
       - name: Log in to Azure Container Registry
         run: |
@@ -97,13 +95,13 @@ jobs:
         uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          tenant-id: 1cc1d936-7230-4613-8b85-133580a285b8
+          subscription-id: 14d4aeee-9190-4f1b-b41a-56d9d4617564
 
       - name: Deploy Bicep template
         uses: azure/arm-deploy@v2
         with:
-          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          subscriptionId: 14d4aeee-9190-4f1b-b41a-56d9d4617564
           resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
           template: ./infra/main.bicep
           parameters: >
