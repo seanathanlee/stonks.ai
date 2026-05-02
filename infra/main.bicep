@@ -331,6 +331,45 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.5')
             memory: '1Gi'
           }
+          probes: [
+            {
+              // Allow up to 100 seconds (10 attempts × 10 s period) for the
+              // container to start before liveness/readiness kicks in.
+              type: 'Startup'
+              httpGet: {
+                path: '/api/health'
+                port: 8000
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              failureThreshold: 10
+              timeoutSeconds: 5
+            }
+            {
+              // Restart the container if it stops responding.
+              type: 'Liveness'
+              httpGet: {
+                path: '/api/health'
+                port: 8000
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+              failureThreshold: 3
+              timeoutSeconds: 5
+            }
+            {
+              // Stop routing traffic to the container until it is ready.
+              type: 'Readiness'
+              httpGet: {
+                path: '/api/health'
+                port: 8000
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              failureThreshold: 3
+              timeoutSeconds: 5
+            }
+          ]
           env: concat(
             [
               { name: 'AZURE_OPENAI_ENDPOINT', value: cognitiveServices.properties.endpoint }
