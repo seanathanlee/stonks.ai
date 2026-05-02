@@ -2,7 +2,7 @@
 
 An end-to-end sample that shows how to build, containerize, and deploy a **multi-agent AI system** to **Azure** using GitHub Actions.
 
-The system scrapes NASDAQ stock prices daily, stores them in **Azure Data Explorer (Kusto)**, and runs **9 specialised child agents** (each with a distinct investment philosophy) through a **parent orchestrator agent** to produce ranked stock picks across four time horizons. All forecasts are persisted back to ADX for querying and analysis.
+The system scrapes NASDAQ stock prices daily, stores them in **Azure Data Explorer (Kusto)**, and runs **9 specialised child agents** (each with a distinct investment philosophy) through a **parent orchestrator agent** to produce ranked stock picks across four time horizons. All forecasts are persisted back to ADX for querying and analysis. An **evaluation agent** then measures how accurately each agent's 1-month forecasts matched actual stock returns, feeding accuracy scores back into ADX and surfacing them in the chat UI.
 
 ---
 
@@ -11,26 +11,31 @@ The system scrapes NASDAQ stock prices daily, stores them in **Azure Data Explor
 ```
 stonks.ai/
 ├── agents/
-│   ├── agent.py           # Original single AI agent (Azure OpenAI + tool-calling)
-│   ├── adx_client.py      # ADX query + ingestion wrapper
-│   ├── chat_agent.py      # Conversational chat agent (used by the web UI)
-│   ├── scraper.py         # NASDAQ symbol list + price fetcher
-│   ├── child_agents.py    # 9 child agent definitions + shared runner
-│   └── parent_agent.py    # Orchestrator: reads ADX, fans out, writes forecasts
+│   ├── agent.py              # Original single AI agent (Azure OpenAI + tool-calling)
+│   ├── adx_client.py         # ADX query + ingestion wrapper
+│   ├── chat_agent.py         # Conversational chat agent (used by the web UI)
+│   ├── evaluation_agent.py   # Evaluates 1-month forecast accuracy vs actual returns
+│   ├── scraper.py            # NASDAQ symbol list + price fetcher
+│   ├── child_agents.py       # 9 child agent definitions + shared runner
+│   └── parent_agent.py       # Orchestrator: reads ADX, fans out, writes forecasts
 ├── api/
-│   └── main.py            # FastAPI web application (serves chat UI + REST API)
+│   └── main.py               # FastAPI web application (serves chat UI + REST API)
 ├── frontend/
-│   └── index.html         # Browser chatbot UI (Chart.js, no build step)
+│   └── index.html            # Browser chatbot UI (Chart.js, agent roster panel, no build step)
 ├── infra/
-│   ├── main.bicep         # Root Bicep template (AI Services + ADX cluster/DB/tables)
-│   └── main.bicepparam    # Default parameter values
+│   ├── main.bicep            # Root Bicep template (AI Services, ADX, ACR, Container App, Static Web App)
+│   └── main.bicepparam       # Default parameter values
 ├── .github/
 │   └── workflows/
-│       ├── deploy.yml          # CI/CD pipeline (infrastructure deploy)
-│       ├── daily-scrape.yml    # Scheduled daily price ingestion (01:00 UTC)
-│       └── snapshot-scrape.yml # Manual 30-day backfill trigger
+│       ├── deploy.yml             # CI/CD pipeline (infra + backend + frontend deploy)
+│       ├── daily-scrape.yml       # Scheduled daily price ingestion (01:00 UTC)
+│       ├── snapshot-scrape.yml    # Manual 30-day backfill trigger
+│       └── daily-evaluation.yml   # Scheduled daily forecast evaluation (03:00 UTC)
+├── tests/
+│   └── e2e/                  # Playwright end-to-end tests (pytest-playwright)
 ├── Dockerfile
 ├── requirements.txt
+├── requirements-test.txt
 ├── .env.example
 └── README.md
 ```
@@ -42,12 +47,21 @@ stonks.ai/
 ```
 GitHub Actions
     │
-    ├─► deploy.yml
-    │       └─► Azure AI Services (Azure OpenAI GPT-4o)
-    │       └─► Azure Data Explorer cluster (stonksaiadx)
-    │               ├── database: stonksai
-    │               │       ├── table: dailyStockPrice
-    │               │       └── table: agentStockForecast
+    ├─► deploy.yml  (on push to main)
+    │       ├─► Job 1: Deploy Azure infrastructure (Bicep)
+    │       │       └─► Azure AI Services (Azure OpenAI GPT-4o)
+    │       │       └─► Azure Data Explorer cluster (stonksaiadx)
+    │       │               ├── database: stonksai
+    │       │               │       ├── table:             dailyStockPrice
+    │       │               │       ├── materialized-view: dailyStockPriceMV
+    │       │               │       ├── table:             agentStockForecast
+    │       │               │       ├── materialized-view: agentStockForecastMV
+    │       │               │       └── table:             agentStockEvaluation
+    │       │       └─► Azure Container Registry (stonksaiacr)
+    │       │       └─► Azure Container App (stonksai-api)
+    │       │       └─► Azure Static Web App  (skewthis.com)
+    │       ├─► Job 2: Build Docker image → push to ACR → update Container App
+    │       └─► Job 3: Inject API URL into frontend → deploy to Static Web App
     │
     ├─► daily-scrape.yml  (runs 01:00 UTC every day)
     │       └─► agents/scraper.py --mode daily
@@ -57,28 +71,35 @@ GitHub Actions
     │       └─► agents/scraper.py --mode snapshot
     │               └─► Yahoo Finance API (30 days)  ──► ADX dailyStockPrice
     │
-    └─► agents/parent_agent.py  (run on-demand or on a schedule)
-            ├─► ADX dailyStockPrice  ──► stock data (30-day window)
-            ├─► 9 child agents (concurrent)
-            │       ├── momentum_trader
-            │       ├── mean_reversion
-            │       ├── value_investor
-            │       ├── growth_investor
-            │       ├── volatility_hunter
-            │       ├── sector_rotation
-            │       ├── technical_analyst
-            │       ├── contrarian_investor
-            │       └── risk_adjusted_optimizer
-            └─► ADX agentStockForecast  (5 picks × 4 horizons × 9 agents)
+    ├─► agents/parent_agent.py  (run on-demand or on a schedule)
+    │       ├─► ADX dailyStockPriceMV  ──► stock data (30-day window)
+    │       ├─► 9 child agents (concurrent)
+    │       │       ├── momentum_trader
+    │       │       ├── mean_reversion
+    │       │       ├── value_investor
+    │       │       ├── growth_investor
+    │       │       ├── volatility_hunter
+    │       │       ├── sector_rotation
+    │       │       ├── technical_analyst
+    │       │       ├── contrarian_investor
+    │       │       └── risk_adjusted_optimizer
+    │       └─► ADX agentStockForecast  (5 picks × 4 horizons × 9 agents)
+    │
+    └─► daily-evaluation.yml  (runs 03:00 UTC every day)
+            └─► agents/evaluation_agent.py
+                    ├─► ADX agentStockForecast  ──► 1-month forecasts from 30 days ago
+                    ├─► ADX dailyStockPriceMV   ──► actual prices over same window
+                    └─► ADX agentStockEvaluation ◄── accuracy scores written back
 
-Browser  ──► api/main.py (FastAPI)
+Browser  ──► api/main.py (FastAPI, rate-limited)
     │               ├── POST /api/chat   ──► agents/chat_agent.py
-    │               │       ├── trigger_full_analysis  ──► parent_agent
-    │               │       ├── get_latest_forecasts   ──► ADX agentStockForecast
-    │               │       ├── get_price_history      ──► ADX dailyStockPrice
-    │               │       └── compare_agent_forecasts ──► ADX agentStockForecast
+    │               │       ├── get_latest_forecasts    ──► ADX agentStockForecastMV
+    │               │       ├── get_price_history       ──► ADX dailyStockPriceMV
+    │               │       ├── compare_agent_forecasts ──► ADX agentStockForecastMV
+    │               │       └── get_agent_evaluations   ──► ADX agentStockEvaluation
+    │               ├── GET /api/health  ──► health check
     │               └── GET /            ──► frontend/index.html
-    └── Chart.js charts rendered inline in chat
+    └── Chart.js charts + collapsible Agent Roster panel rendered inline in chat
 ```
 
 ---
@@ -124,6 +145,8 @@ Browser  ──► api/main.py (FastAPI)
    - View latest forecasts with inline charts
    - Explore price history for any symbol
    - Compare how different agents rate a specific stock
+   - View the collapsible **Agent Roster** panel with descriptions of all 9 agents
+   - Check **agent accuracy scores** from the evaluation pipeline
 
 4. **Run the original single agent (CLI)**
 
@@ -143,6 +166,22 @@ Browser  ──► api/main.py (FastAPI)
    python -m agents.parent_agent
    ```
 
+7. **Run the evaluation agent (CLI)**
+
+   Requires at least 30 days of forecast + price data in ADX.
+
+   ```bash
+   python -m agents.evaluation_agent
+   ```
+
+8. **Run end-to-end tests**
+
+   ```bash
+   pip install -r requirements-test.txt
+   playwright install chromium
+   python -m pytest tests/e2e/ -v --browser chromium
+   ```
+
 ---
 
 ## Deploy to Azure
@@ -156,7 +195,9 @@ az login
 # Create a resource group
 az group create --name rg-stonksai --location eastus
 
-# Deploy the Bicep template (provisions AI Services + ADX cluster + tables)
+# Deploy the Bicep template
+# Provisions: AI Services, ADX cluster + DB + tables + views,
+#             Azure Container Registry, Container App, Static Web App
 az deployment group create \
   --resource-group rg-stonksai \
   --template-file infra/main.bicep \
@@ -183,17 +224,17 @@ Then add the following **repository secrets** in GitHub → Settings → Secrets
 | `AZURE_TENANT_ID` | Azure tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
 | `AZURE_RESOURCE_GROUP` | `rg-stonksai` |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint URL |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
 | `ADX_CLUSTER_URI` | ADX cluster URI, e.g. `https://stonksaiadx.eastus.kusto.windows.net` |
 | `ADX_DATABASE` | ADX database name (`stonksai`) |
 
 And optionally add these **repository variables**:
 
-| Variable | Default |
-|----------|---------|
-| `BASE_NAME` | `stonksai` |
-| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BASE_NAME` | `stonksai` | Prefix for all Azure resource names |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` | Azure OpenAI model deployment name |
+| `SWA_LOCATION` | `centralus` | Azure region for the Static Web App |
 
 ### 3 — Seed historical data (one-time)
 
@@ -201,15 +242,28 @@ After the infrastructure is deployed, trigger the snapshot workflow to backfill 
 
 GitHub → Actions → **Snapshot Stock Price Scrape** → **Run workflow**
 
-### 4 — Automated daily scraping
+### 4 — Automated daily workflows
 
-The `daily-scrape.yml` workflow runs automatically at **01:00 UTC** every day, fetching the previous day's closing prices for all NASDAQ symbols and ingesting them into ADX.
+| Workflow | Schedule | What it does |
+|----------|----------|--------------|
+| `daily-scrape.yml` | 01:00 UTC | Fetches previous day's NASDAQ closing prices → ADX |
+| `daily-evaluation.yml` | 03:00 UTC | Evaluates 1-month forecast accuracy → ADX |
 
-You can also trigger it manually from the GitHub Actions tab.
+Both workflows can also be triggered manually from the GitHub Actions tab.
+
+### 5 — Full CI/CD on push to main
+
+Pushing to `main` triggers `deploy.yml`, which runs three sequential jobs:
+
+1. **Deploy Azure infrastructure** — applies the Bicep template (idempotent).
+2. **Build and deploy backend** — builds the Docker image, pushes it to ACR, and updates the Container App.
+3. **Deploy frontend** — injects the Container App URL into `frontend/index.html` and deploys it to the Azure Static Web App (served at skewthis.com).
 
 ---
 
 ## ADX Schema Reference
+
+ADX queries use **materialized views** (`dailyStockPriceMV`, `agentStockForecastMV`) to deduplicate rows and serve the most recent data efficiently. The underlying raw tables are still available for audit purposes.
 
 ### `dailyStockPrice`
 
@@ -219,6 +273,8 @@ You can also trigger it manually from the GitHub Actions tab.
 | `symbol` | string | Stock ticker (e.g. `AAPL`) |
 | `price` | real | Closing price |
 | `priceDate` | datetime | Trading date for the price |
+
+**Materialized view:** `dailyStockPriceMV` — deduplicates by `(symbol, priceDate)`, retaining the latest `reportTime`.
 
 ### `agentStockForecast`
 
@@ -230,6 +286,46 @@ You can also trigger it manually from the GitHub Actions tab.
 | `horizon` | string | `"1m"`, `"3m"`, `"6m"`, or `"1y"` |
 | `expectedReturn` | real | Forecasted percentage return |
 | `rank` | int | Rank within this agent+horizon (1 = best) |
+
+**Materialized view:** `agentStockForecastMV` — deduplicates by `(agentName, symbol, horizon)`, retaining the latest forecast.
+
+### `agentStockEvaluation`
+
+Written by `evaluation_agent.py` after comparing 1-month forecasts against actual returns.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `symbol` | string | Stock ticker |
+| `forecastReturn` | real | Forecasted % return from the original prediction |
+| `actualReturn` | real | Realized % return over the 30-day window |
+| `forecastRank` | int | Rank assigned by the forecasting agent |
+| `actualRank` | int | Rank based on actual returns (1 = best performer) |
+| `accuracyScore` | real | Combined error: avg of absolute return error and absolute rank error (lower = more accurate) |
+| `agentName` | string | Name of the forecasting agent |
+| `forecastReportTime` | datetime | Timestamp of the original forecast |
+| `reportTime` | datetime | When this evaluation ran |
+| `runId` | string | Unique ID for this evaluation run |
+| `horizon` | string | Forecast horizon evaluated (always `"1m"`) |
+
+---
+
+## Agent Evaluations
+
+The evaluation pipeline measures how well each agent's **1-month forecasts** matched actual stock returns.
+
+**How it works (runs daily at 03:00 UTC via `daily-evaluation.yml`):**
+
+1. Looks up all `"1m"` horizon forecasts stored exactly **30 days ago** in `agentStockForecast`.
+2. Fetches the actual closing prices for those symbols over that 30-day window from `dailyStockPriceMV`.
+3. Computes **realized returns** for each symbol and ranks them by actual performance.
+4. Calculates a per-prediction **accuracy score** = average of:
+   - absolute error between forecasted return and actual return
+   - absolute error between forecasted rank and actual rank
+5. Writes all rows to `agentStockEvaluation` in ADX.
+
+**Lower accuracy score = more accurate agent.**
+
+You can ask the chat UI "Which agents have been most accurate?" to get an inline chart of per-agent accuracy scores powered by `get_agent_evaluations`.
 
 ---
 
