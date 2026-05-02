@@ -70,3 +70,11 @@ jobs:
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         run: python -m agents.scraper --mode snapshot --days ${{ inputs.days || '30' }}
+
+      - name: Run parent agent
+        env:
+          ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
+          ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+        run: python -m agents.parent_agent

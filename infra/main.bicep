@@ -147,6 +147,52 @@ resource agentStockForecastTable 'Microsoft.Kusto/clusters/databases/scripts@202
 }
 
 // ============================================================
+// ADX materialized view: dailyStockPriceMV
+//   Deduplicates dailyStockPrice by (symbol, priceDate),
+//   retaining the row with the latest reportTime.
+// ============================================================
+
+resource dailyStockPriceMVScript 'Microsoft.Kusto/clusters/databases/scripts@2023-08-15' = {
+  name: 'create-daily-stock-price-mv'
+  parent: adxDatabase
+  dependsOn: [dailyStockPriceTable]
+  properties: {
+    #disable-next-line use-secure-value-for-secure-inputs
+    scriptContent: '''
+.create-or-alter materialized-view with (backfill=true) dailyStockPriceMV on table dailyStockPrice
+{
+    dailyStockPrice
+    | summarize arg_max(reportTime, price) by symbol, priceDate
+}
+'''
+    continueOnErrors: false
+  }
+}
+
+// ============================================================
+// ADX materialized view: agentStockForecastMV
+//   Deduplicates agentStockForecast by (agentName, symbol,
+//   horizon), retaining the row with the latest reportTime.
+// ============================================================
+
+resource agentStockForecastMVScript 'Microsoft.Kusto/clusters/databases/scripts@2023-08-15' = {
+  name: 'create-agent-stock-forecast-mv'
+  parent: adxDatabase
+  dependsOn: [agentStockForecastTable]
+  properties: {
+    #disable-next-line use-secure-value-for-secure-inputs
+    scriptContent: '''
+.create-or-alter materialized-view with (backfill=true) agentStockForecastMV on table agentStockForecast
+{
+    agentStockForecast
+    | summarize arg_max(reportTime, expectedReturn, rank) by agentName, symbol, horizon
+}
+'''
+    continueOnErrors: false
+  }
+}
+
+// ============================================================
 // Azure Static Web App — skewthis.com frontend
 // ============================================================
 

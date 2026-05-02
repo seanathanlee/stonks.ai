@@ -257,7 +257,7 @@
 
   <div id="suggestions">
     <button class="suggestion-btn" onclick="sendSuggestion(this)">Show top picks for next month</button>
-    <button class="suggestion-btn" onclick="sendSuggestion(this)">Run full analysis</button>
+    <button class="suggestion-btn" onclick="sendSuggestion(this)">What should I invest in?</button>
     <button class="suggestion-btn" onclick="sendSuggestion(this)">Compare agents on AAPL</button>
     <button class="suggestion-btn" onclick="sendSuggestion(this)">Show MSFT price history</button>
     <button class="suggestion-btn" onclick="sendSuggestion(this)">Best 1-year picks</button>
@@ -301,11 +301,11 @@ inputEl.addEventListener('keydown', e => {
 window.addEventListener('DOMContentLoaded', () => {
   appendBotMessage(
     "👋 Hi! I'm **Stonks.ai**, your multi-agent stock analysis assistant.\n\n" +
-    "I coordinate **9 specialised AI agents** — from momentum traders to contrarian investors — " +
-    "to analyse NASDAQ stocks and surface the best opportunities.\n\n" +
+    "I'm powered by **9 specialised AI agents** — from momentum traders to contrarian investors — " +
+    "that automatically analyse NASDAQ stocks every day and surface the best opportunities.\n\n" +
     "What would you like to explore today? You can:\n" +
-    "• Ask me to **run a full analysis** (all 9 agents)\n" +
     "• View the **latest forecasts** for any horizon (1m, 3m, 6m, 1y)\n" +
+    "• Get **stock suggestions** based on the most recent agent consensus\n" +
     "• See **price history** for specific stocks\n" +
     "• **Compare** how different agents rate a stock\n\n" +
     "Just type your question or pick a suggestion below ↓",
