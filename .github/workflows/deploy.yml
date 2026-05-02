@@ -4,13 +4,15 @@
 # ============================================================
 #
 # This workflow:
-#   1. Deploys the Azure infrastructure (AI Services, ADX,
-#      Container Registry, Container App, Static Web App) using
-#      the Bicep template in infra/.
-#   2. Builds the Docker image and pushes it to ACR, then updates
-#      the Container App to serve the FastAPI backend.
-#   3. Injects the Container App URL into the frontend and deploys
-#      the frontend/ directory to Azure Static Web Apps
+#   1. Provisions the Azure Container Registry (ACR) alone so
+#      the real image can be pushed before the full Bicep deploy.
+#   2. Builds the Docker image and pushes it to ACR.
+#   3. Deploys the full Azure infrastructure (AI Services, ADX,
+#      Container App, Static Web App) using the Bicep template
+#      in infra/, passing the real image URI as a parameter so
+#      no placeholder image is ever used.
+#   4. Injects the Container App URL into the frontend and
+#      deploys the frontend/ directory to Azure Static Web Apps
 #      (served at skewthis.com).
 #
 # Required repository secrets:
@@ -39,14 +41,78 @@ permissions:
   contents: read
 
 jobs:
-  deploy-infrastructure:
-    name: Deploy Azure infrastructure
+  provision-acr:
+    name: Provision Azure Container Registry
     runs-on: ubuntu-latest
 
     outputs:
-      acr_login_server: ${{ steps.bicep.outputs.acrLoginServer }}
-      acr_name: ${{ steps.bicep.outputs.acrName }}
-      container_app_name: ${{ steps.bicep.outputs.containerAppName }}
+      acr_login_server: ${{ steps.acr.outputs.acrLoginServer }}
+      acr_name: ${{ steps.acr.outputs.acrName }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy ACR
+        id: acr
+        uses: azure/arm-deploy@v2
+        with:
+          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
+          template: ./infra/acr-only.bicep
+          parameters: baseName=${{ vars.BASE_NAME || 'stonksai' }}
+          failOnStdErr: false
+
+  build-and-push:
+    name: Build and push Docker image to ACR
+    runs-on: ubuntu-latest
+    needs: provision-acr
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+
+    outputs:
+      image: ${{ steps.push.outputs.image }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Log in to Azure Container Registry
+        run: az acr login --name "${{ needs.provision-acr.outputs.acr_name }}"
+
+      - name: Build and push Docker image
+        id: push
+        run: |
+          ACR="${{ needs.provision-acr.outputs.acr_login_server }}"
+          IMAGE="${ACR}/stonksai:latest"
+          docker build --tag "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+
+  deploy-infrastructure:
+    name: Deploy Azure infrastructure
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
+
+    outputs:
       container_app_fqdn: ${{ steps.bicep.outputs.containerAppFqdn }}
 
     steps:
@@ -62,87 +128,24 @@ jobs:
 
       - name: Deploy Bicep template
         id: bicep
-        uses: azure/arm-deploy@v2
-        with:
-          subscriptionId: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          resourceGroupName: ${{ secrets.AZURE_RESOURCE_GROUP }}
-          template: ./infra/main.bicep
-          parameters: >
-            baseName=${{ vars.BASE_NAME || 'stonksai' }}
-            swaLocation=${{ vars.SWA_LOCATION || 'centralus' }}
-            azureOpenAIApiKey=${{ secrets.AZURE_OPENAI_API_KEY }}
-          failOnStdErr: false
-
-  deploy-backend:
-    name: Build and deploy FastAPI backend to Container App
-    runs-on: ubuntu-latest
-    needs: deploy-infrastructure
-    defaults:
-      run:
-        shell: bash -euo pipefail {0}
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Azure login (OIDC)
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Wait for AcrPull role assignment to propagate
         run: |
-          ACR_ID=$(az acr show \
-            --name "${{ needs.deploy-infrastructure.outputs.acr_name }}" \
-            --query id -o tsv)
-          PRINCIPAL_ID=$(az containerapp show \
-            --name "${{ needs.deploy-infrastructure.outputs.container_app_name }}" \
+          RESULT=$(az deployment group create \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --query identity.principalId -o tsv)
-          echo "Waiting for AcrPull role to be visible for principal ${PRINCIPAL_ID} on ${ACR_ID}..."
-          for attempt in $(seq 1 20); do
-            COUNT=$(az role assignment list \
-              --assignee "$PRINCIPAL_ID" \
-              --scope "$ACR_ID" \
-              --role "AcrPull" \
-              --query "length(@)" -o tsv 2>/dev/null || echo "0")
-            if [ "${COUNT}" -ge 1 ]; then
-              echo "AcrPull role assignment confirmed after attempt ${attempt}."
-              break
-            fi
-            echo "Attempt ${attempt}/20: role not yet visible, sleeping 15 seconds..."
-            sleep 15
-          done
-          if [ "${COUNT}" -lt 1 ]; then
-            echo "ERROR: AcrPull role assignment not found after 5 minutes." >&2
-            exit 1
-          fi
-
-      - name: Log in to Azure Container Registry
-        run: az acr login --name "${{ needs.deploy-infrastructure.outputs.acr_name }}"
-
-      - name: Build and push Docker image
-        run: |
-          ACR="${{ needs.deploy-infrastructure.outputs.acr_login_server }}"
-          IMAGE="${ACR}/stonksai:latest"
-          docker build --tag "$IMAGE" .
-          docker push "$IMAGE"
-
-      - name: Update Container App with new image
-        run: |
-          az containerapp update \
-            --name "${{ needs.deploy-infrastructure.outputs.container_app_name }}" \
-            --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
-            --image "${{ needs.deploy-infrastructure.outputs.acr_login_server }}/stonksai:latest"
+            --template-file ./infra/main.bicep \
+            --parameters \
+              baseName="${{ vars.BASE_NAME || 'stonksai' }}" \
+              swaLocation="${{ vars.SWA_LOCATION || 'centralus' }}" \
+              azureOpenAIApiKey="${{ secrets.AZURE_OPENAI_API_KEY }}" \
+              containerImage="${{ needs.build-and-push.outputs.image }}" \
+            --query properties.outputs \
+            --output json)
+          echo "containerAppFqdn=$(echo "$RESULT" | jq -r '.containerAppFqdn.value')" \
+            >> "$GITHUB_OUTPUT"
 
   deploy-frontend:
     name: Deploy frontend to Azure Static Web Apps
     runs-on: ubuntu-latest
-    needs:
-      - deploy-infrastructure
-      - deploy-backend
+    needs: deploy-infrastructure
     defaults:
       run:
         shell: bash -euo pipefail {0}
