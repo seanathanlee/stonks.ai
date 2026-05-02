@@ -87,6 +87,7 @@ resource dailyStockPriceTable 'Microsoft.Kusto/clusters/databases/scripts@2023-0
   name: 'create-daily-stock-price-table'
   parent: adxDatabase
   properties: {
+    #disable-next-line use-secure-value-for-secure-inputs
     scriptContent: '''
 .create-merge table dailyStockPrice (
     reportTime: datetime,
@@ -115,6 +116,7 @@ resource agentStockForecastTable 'Microsoft.Kusto/clusters/databases/scripts@202
   name: 'create-agent-stock-forecast-table'
   parent: adxDatabase
   properties: {
+    #disable-next-line use-secure-value-for-secure-inputs
     scriptContent: '''
 .create-merge table agentStockForecast (
     reportTime: datetime,
