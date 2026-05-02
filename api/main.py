@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -26,6 +27,14 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="Stonks.ai", version="1.0.0")
+
+# Allow cross-origin requests so the SWA frontend can reach this API
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
 
 # Serve the frontend directory as static files
 _FRONTEND_DIR = Path(__file__).parent.parent / "frontend"

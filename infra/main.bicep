@@ -3,6 +3,8 @@
 // Provisions:
 //   • Azure AI Services (Cognitive Services) account
 //   • Azure Data Explorer (Kusto) cluster + database + tables
+//   • Azure Container Registry
+//   • Azure Container App (FastAPI backend)
 // ============================================================
 
 @description('Base name used to derive all resource names.')
@@ -35,6 +37,10 @@ param adxSkuTier string = 'Basic'
 
 @description('Number of ADX cluster instances.')
 param adxCapacity int = 1
+
+@description('Azure OpenAI API key passed as a secure parameter so it is stored as a Container App secret.')
+@secure()
+param azureOpenAIApiKey string = ''
 
 // ============================================================
 // Azure AI Services (Cognitive Services) account
@@ -147,6 +153,128 @@ resource agentStockForecastTable 'Microsoft.Kusto/clusters/databases/scripts@202
 }
 
 // ============================================================
+// Azure Container Registry
+// ============================================================
+
+resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
+  name: '${baseName}acr'
+  location: location
+  sku: {
+    name: 'Basic'
+  }
+  properties: {
+    adminUserEnabled: false
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+// ============================================================
+// Container App Environment (Consumption plan)
+// ============================================================
+
+resource containerAppEnv 'Microsoft.App/managedEnvironments@2024-03-01' = {
+  name: '${baseName}-env'
+  location: location
+  properties: {
+    zoneRedundant: false
+  }
+}
+
+// ============================================================
+// Container App – FastAPI backend
+// Uses a public placeholder image on first provision; the deploy
+// workflow overwrites it with the real ACR image after pushing.
+// ============================================================
+
+resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: '${baseName}-api'
+  location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
+  properties: {
+    environmentId: containerAppEnv.id
+    configuration: {
+      ingress: {
+        external: true
+        targetPort: 8000
+        transport: 'http'
+        allowInsecure: false
+      }
+      secrets: azureOpenAIApiKey != '' ? [
+        {
+          name: 'azure-openai-api-key'
+          value: azureOpenAIApiKey
+        }
+      ] : []
+      registries: [
+        {
+          server: acr.properties.loginServer
+          identity: 'system'
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'stonksai-api'
+          // Public placeholder image used for initial provisioning.
+          // The deploy workflow replaces this with the real ACR image.
+          image: 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+          env: concat(
+            [
+              { name: 'AZURE_OPENAI_ENDPOINT', value: cognitiveServices.properties.endpoint }
+              { name: 'AZURE_OPENAI_DEPLOYMENT', value: 'gpt-4o' }
+              { name: 'AZURE_OPENAI_API_VERSION', value: '2024-02-01' }
+              { name: 'ADX_CLUSTER_URI', value: adxCluster.properties.uri }
+              { name: 'ADX_DATABASE', value: 'stonksai' }
+            ],
+            azureOpenAIApiKey != '' ? [
+              { name: 'AZURE_OPENAI_API_KEY', secretRef: 'azure-openai-api-key' }
+            ] : []
+          )
+        }
+      ]
+      scale: {
+        minReplicas: 0
+        maxReplicas: 3
+      }
+    }
+  }
+}
+
+// Allow the Container App's managed identity to pull images from ACR
+resource acrPullRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  // AcrPull built-in role: 7f951dda-4ed3-4680-a7ca-43fe172d538d
+  name: guid(acr.id, containerApp.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  scope: acr
+  properties: {
+    roleDefinitionId: subscriptionResourceId(
+      'Microsoft.Authorization/roleDefinitions',
+      '7f951dda-4ed3-4680-a7ca-43fe172d538d'
+    )
+    principalId: containerApp.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// Grant the Container App's managed identity access to the ADX database
+resource adxContainerAppPrincipal 'Microsoft.Kusto/clusters/databases/principalAssignments@2023-08-15' = {
+  name: 'containerapp-user'
+  parent: adxDatabase
+  properties: {
+    principalId: containerApp.identity.principalId
+    principalType: 'App'
+    role: 'User'
+    tenantId: subscription().tenantId
+  }
+}
+
+// ============================================================
 // Azure Static Web App — skewthis.com frontend
 // ============================================================
 
@@ -203,3 +331,7 @@ output adxClusterId string = adxCluster.id
 output adxDatabaseName string = adxDatabase.name
 output staticWebAppName string = staticWebApp.name
 output staticWebAppDefaultHostname string = staticWebApp.properties.defaultHostname
+output acrLoginServer string = acr.properties.loginServer
+output acrName string = acr.name
+output containerAppName string = containerApp.name
+output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn

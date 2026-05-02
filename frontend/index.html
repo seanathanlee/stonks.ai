@@ -275,6 +275,11 @@
 </div>
 
 <script>
+// ── API base URL ────────────────────────────────────────────────────────────
+// Empty string = relative URL (local Docker dev). Replaced at deploy time
+// with the absolute Container App URL for the production SWA deployment.
+const API_BASE = '';
+
 // ── Session ────────────────────────────────────────────────────────────────
 const SESSION_ID = 'sess_' + Math.random().toString(36).slice(2, 11);
 
@@ -329,7 +334,7 @@ async function sendMessage() {
   const typingId = appendTypingIndicator();
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch(API_BASE + '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ session_id: SESSION_ID, message: text }),
