@@ -11,6 +11,16 @@ param baseName string = 'stonksai'
 @description('Azure region for all resources.')
 param location string = resourceGroup().location
 
+@description('Azure region for the Static Web App. Must be a region that supports Azure Static Web Apps.')
+@allowed([
+  'centralus'
+  'eastus2'
+  'eastasia'
+  'westeurope'
+  'westus2'
+])
+param swaLocation string = 'centralus'
+
 @description('SKU for the Cognitive Services account.')
 @allowed(['S0'])
 param sku string = 'S0'
@@ -137,6 +147,52 @@ resource agentStockForecastTable 'Microsoft.Kusto/clusters/databases/scripts@202
 }
 
 // ============================================================
+// Azure Static Web App — skewthis.com frontend
+// ============================================================
+
+resource staticWebApp 'Microsoft.Web/staticSites@2023-01-01' = {
+  name: '${baseName}-web'
+  location: swaLocation
+  sku: {
+    name: 'Free'
+    tier: 'Free'
+  }
+  properties: {
+    buildProperties: {
+      skipGithubActionWorkflowGeneration: true
+    }
+  }
+}
+
+// Apex domain: skewthis.com — requires a DNS TXT record for validation.
+// Before this resource can reach the "Validated" state you must add a
+// TXT record at your DNS provider:
+//   Name:  @ (or skewthis.com)
+//   Type:  TXT
+//   Value: <validationToken shown in the Azure Portal for this domain>
+resource customDomainApex 'Microsoft.Web/staticSites/customDomains@2023-01-01' = {
+  name: 'skewthis.com'
+  parent: staticWebApp
+  properties: {
+    validationMethod: 'dns-txt-token'
+  }
+}
+
+// www subdomain: www.skewthis.com — requires a CNAME record for validation.
+// Add a DNS CNAME record at your DNS provider:
+//   Name:  www
+//   Type:  CNAME
+//   Value: ${staticWebApp.properties.defaultHostname}
+resource customDomainWww 'Microsoft.Web/staticSites/customDomains@2023-01-01' = {
+  name: 'www.skewthis.com'
+  parent: staticWebApp
+  properties: {
+    validationMethod: 'cname-delegation'
+  }
+  dependsOn: [customDomainApex]
+}
+
+// ============================================================
 // Outputs
 // ============================================================
 
@@ -145,3 +201,5 @@ output cognitiveServicesId string = cognitiveServices.id
 output adxClusterUri string = adxCluster.properties.uri
 output adxClusterId string = adxCluster.id
 output adxDatabaseName string = adxDatabase.name
+output staticWebAppName string = staticWebApp.name
+output staticWebAppDefaultHostname string = staticWebApp.properties.defaultHostname
