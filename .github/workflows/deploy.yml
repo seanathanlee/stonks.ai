@@ -77,6 +77,9 @@ jobs:
     name: Build and deploy FastAPI backend to Container App
     runs-on: ubuntu-latest
     needs: deploy-infrastructure
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
 
     steps:
       - name: Checkout repository
@@ -94,7 +97,6 @@ jobs:
 
       - name: Build and push Docker image
         run: |
-          set -euo pipefail
           ACR="${{ needs.deploy-infrastructure.outputs.acr_login_server }}"
           IMAGE="${ACR}/stonksai:latest"
           docker build --tag "$IMAGE" .
@@ -102,7 +104,6 @@ jobs:
 
       - name: Update Container App with new image
         run: |
-          set -euo pipefail
           az containerapp update \
             --name "${{ needs.deploy-infrastructure.outputs.container_app_name }}" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \
@@ -114,6 +115,9 @@ jobs:
     needs:
       - deploy-infrastructure
       - deploy-backend
+    defaults:
+      run:
+        shell: bash -euo pipefail {0}
 
     steps:
       - name: Checkout repository
@@ -128,16 +132,21 @@ jobs:
 
       - name: Inject Container App URL into frontend
         run: |
-          set -euo pipefail
           FQDN="${{ needs.deploy-infrastructure.outputs.container_app_fqdn }}"
           API_URL="https://${FQDN}"
           echo "Setting API_BASE to ${API_URL}"
-          sed -i "s|const API_BASE = '';|const API_BASE = '${API_URL}';|" frontend/index.html
+          python3 -c "
+import sys
+url = sys.argv[1]
+path = 'frontend/index.html'
+content = open(path).read()
+updated = content.replace(\"const API_BASE = '';\", f\"const API_BASE = '{url}';\", 1)
+open(path, 'w').write(updated)
+" "$API_URL"
 
       - name: Get Static Web App deployment token
         id: swa-token
         run: |
-          set -euo pipefail
           TOKEN=$(az staticwebapp secrets list \
             --name "${{ vars.BASE_NAME || 'stonksai' }}-web" \
             --resource-group "${{ secrets.AZURE_RESOURCE_GROUP }}" \

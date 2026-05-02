@@ -232,6 +232,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               { name: 'AZURE_OPENAI_API_VERSION', value: '2024-02-01' }
               { name: 'ADX_CLUSTER_URI', value: adxCluster.properties.uri }
               { name: 'ADX_DATABASE', value: 'stonksai' }
+              {
+                name: 'CORS_ORIGINS'
+                value: 'https://skewthis.com,https://www.skewthis.com,https://${staticWebApp.properties.defaultHostname}'
+              }
             ],
             azureOpenAIApiKey != '' ? [
               { name: 'AZURE_OPENAI_API_KEY', secretRef: 'azure-openai-api-key' }
@@ -240,7 +244,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: 0
+        minReplicas: 1
         maxReplicas: 3
       }
     }

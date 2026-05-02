@@ -28,10 +28,20 @@ log = logging.getLogger(__name__)
 
 app = FastAPI(title="Stonks.ai", version="1.0.0")
 
-# Allow cross-origin requests so the SWA frontend can reach this API
+# Allow cross-origin requests from the configured origins.
+# CORS_ORIGINS is a comma-separated list of allowed origins; defaults to the
+# wildcard only when the env var is not set (e.g. local development).
+_raw_cors = os.environ.get("CORS_ORIGINS", "")
+_cors_origins: list[str] = [o.strip() for o in _raw_cors.split(",") if o.strip()] or ["*"]
+if _cors_origins == ["*"]:
+    log.warning(
+        "CORS_ORIGINS is not set — allowing all origins. "
+        "Set CORS_ORIGINS to a comma-separated list of allowed origins in production."
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
