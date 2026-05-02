@@ -13,9 +13,14 @@ stonks.ai/
 ├── agents/
 │   ├── agent.py           # Original single AI agent (Azure OpenAI + tool-calling)
 │   ├── adx_client.py      # ADX query + ingestion wrapper
+│   ├── chat_agent.py      # Conversational chat agent (used by the web UI)
 │   ├── scraper.py         # NASDAQ symbol list + price fetcher
 │   ├── child_agents.py    # 9 child agent definitions + shared runner
 │   └── parent_agent.py    # Orchestrator: reads ADX, fans out, writes forecasts
+├── api/
+│   └── main.py            # FastAPI web application (serves chat UI + REST API)
+├── frontend/
+│   └── index.html         # Browser chatbot UI (Chart.js, no build step)
 ├── infra/
 │   ├── main.bicep         # Root Bicep template (AI Services + ADX cluster/DB/tables)
 │   └── main.bicepparam    # Default parameter values
@@ -65,6 +70,15 @@ GitHub Actions
             │       ├── contrarian_investor
             │       └── risk_adjusted_optimizer
             └─► ADX agentStockForecast  (5 picks × 4 horizons × 9 agents)
+
+Browser  ──► api/main.py (FastAPI)
+    │               ├── POST /api/chat   ──► agents/chat_agent.py
+    │               │       ├── trigger_full_analysis  ──► parent_agent
+    │               │       ├── get_latest_forecasts   ──► ADX agentStockForecast
+    │               │       ├── get_price_history      ──► ADX dailyStockPrice
+    │               │       └── compare_agent_forecasts ──► ADX agentStockForecast
+    │               └── GET /            ──► frontend/index.html
+    └── Chart.js charts rendered inline in chat
 ```
 
 ---
@@ -98,19 +112,32 @@ GitHub Actions
    # Edit .env and fill in your Azure OpenAI and ADX values
    ```
 
-3. **Run the original single agent**
+3. **Start the web chat interface**
+
+   ```bash
+   uvicorn api.main:app --reload
+   # Open http://localhost:8000 in your browser
+   ```
+
+   The chatbot lets you:
+   - Run the full 9-agent analysis pipeline
+   - View latest forecasts with inline charts
+   - Explore price history for any symbol
+   - Compare how different agents rate a specific stock
+
+4. **Run the original single agent (CLI)**
 
    ```bash
    python -m agents.agent "What is the current price of AAPL and its 5-day moving average?"
    ```
 
-4. **Backfill 30 days of price data (first-time setup)**
+5. **Backfill 30 days of price data (first-time setup)**
 
    ```bash
    python -m agents.scraper --mode snapshot
    ```
 
-5. **Run the multi-agent orchestrator**
+6. **Run the multi-agent orchestrator (CLI)**
 
    ```bash
    python -m agents.parent_agent

@@ -178,6 +178,83 @@ def ingest_forecasts(rows: list[dict[str, Any]]) -> None:
     _get_ingest_client().ingest_from_stream(stream, ingestion_properties=props)
 
 
+def get_latest_forecasts(
+    horizon: str = "1m",
+    symbol: str | None = None,
+    top_n: int = 5,
+) -> list[dict[str, Any]]:
+    """
+    Return the top *top_n* stock picks from the most recent agent run.
+
+    Aggregates expected returns across all child agents and ranks by the mean.
+    Each returned dict contains:
+        symbol        – stock ticker
+        avgReturn     – average expected % return across agents
+        agentCount    – number of agents that included this symbol
+        horizon       – the horizon used for filtering
+    """
+    if horizon not in ("1m", "3m", "6m", "1y"):
+        raise ValueError(f"Invalid horizon: {horizon!r}. Must be one of 1m, 3m, 6m, 1y.")
+    if top_n < 1:
+        raise ValueError(f"top_n must be a positive integer, got {top_n!r}")
+
+    symbol_filter = f'| where symbol == "{symbol}"' if symbol else ""
+    query = f"""
+agentStockForecast
+| where reportTime >= ago(7d)
+| where horizon == "{horizon}"
+{symbol_filter}
+| summarize avgReturn = round(avg(expectedReturn), 2), agentCount = dcount(agentName) by symbol
+| order by avgReturn desc
+| take {int(top_n)}
+"""
+    client = _get_kusto_client()
+    response = client.execute(_database(), query)
+    return [
+        {
+            "symbol": row["symbol"],
+            "avgReturn": float(row["avgReturn"]),
+            "agentCount": int(row["agentCount"]),
+            "horizon": horizon,
+        }
+        for row in response.primary_results[0]
+    ]
+
+
+def get_agent_comparison(
+    symbol: str,
+    horizon: str | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Return per-agent expected returns for a specific symbol from the most recent run.
+
+    Each returned dict contains:
+        agentName      – child agent name
+        horizon        – investment horizon
+        expectedReturn – forecasted percentage return
+    Rows are sorted by horizon then descending expected return.
+    """
+    horizon_filter = f'| where horizon == "{horizon}"' if horizon else ""
+    query = f"""
+agentStockForecast
+| where reportTime >= ago(7d)
+| where symbol == "{symbol}"
+{horizon_filter}
+| summarize expectedReturn = round(avg(expectedReturn), 2) by agentName, horizon
+| order by horizon asc, expectedReturn desc
+"""
+    client = _get_kusto_client()
+    response = client.execute(_database(), query)
+    return [
+        {
+            "agentName": row["agentName"],
+            "horizon": row["horizon"],
+            "expectedReturn": float(row["expectedReturn"]),
+        }
+        for row in response.primary_results[0]
+    ]
+
+
 def now_utc_iso() -> str:
     """Return the current UTC time as an ISO-8601 string."""
     return datetime.now(timezone.utc).isoformat()
