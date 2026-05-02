@@ -4,14 +4,19 @@
 # ============================================================
 #
 # Triggered manually via workflow_dispatch.  Runs the parent
-# agent for each of the last N days (default: 30), treating
+# agent for each day in the specified date range, treating
 # each calendar day as "today" so that forecasts are generated
 # from the price data available on that day and written to the
 # ADX `agentStockForecast` table with the correct reportTime.
 #
+# Each date runs as a separate matrix job, so Azure OIDC
+# authentication is refreshed per date and a failure on one
+# date does not block the remaining dates.
+#
 # Use this workflow to:
 #   • Backfill forecasts when the agent has not previously run.
 #   • Re-seed forecast data after downtime or data loss.
+#   • Resume from a specific date after a partial failure.
 #
 # Note: Price data for the target window must already exist in
 # ADX.  Run the Snapshot Stock Price Scrape workflow first if
@@ -34,9 +39,17 @@ name: Snapshot Agent Forecast
   workflow_dispatch:
     inputs:
       days:
-        description: "Number of days to back-fill (default: 30)"
+        description: "Number of days to back-fill when start_date is not set (default: 30)"
         required: false
         default: "30"
+        type: string
+      start_date:
+        description: "Start date (YYYY-MM-DD). Overrides 'days' when provided."
+        required: false
+        type: string
+      end_date:
+        description: "End date (YYYY-MM-DD, inclusive). Defaults to today when not set."
+        required: false
         type: string
 
 permissions:
@@ -44,9 +57,39 @@ permissions:
   contents: read
 
 jobs:
-  snapshot-forecast:
-    name: Backfill forecast snapshot
+  generate-dates:
+    name: Generate date list
     runs-on: ubuntu-latest
+    outputs:
+      dates: ${{ steps.dates.outputs.dates }}
+    steps:
+      - name: Generate date list
+        id: dates
+        run: |
+          python3 << 'PYEOF'
+          import json, os
+          from datetime import date, timedelta
+
+          start_date = "${{ inputs.start_date }}"
+          end_date = "${{ inputs.end_date }}"
+          days = int("${{ inputs.days }}" or "30")
+
+          end = date.fromisoformat(end_date) if end_date else date.today()
+          start = date.fromisoformat(start_date) if start_date else end - timedelta(days=days - 1)
+
+          dates = [str(start + timedelta(days=i)) for i in range((end - start).days + 1)]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write("dates=" + json.dumps(dates) + "\n")
+          PYEOF
+
+  snapshot-forecast:
+    name: Forecast for ${{ matrix.date }}
+    needs: generate-dates
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        date: ${{ fromJson(needs.generate-dates.outputs.dates) }}
+      max-parallel: 1
 
     steps:
       - name: Checkout repository
@@ -68,16 +111,12 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Run parent agent for each day in snapshot window
+      - name: Run parent agent for ${{ matrix.date }}
         env:
           ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
           ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
         run: |
-          DAYS="${{ inputs.days || '30' }}"
-          for i in $(seq 0 $(( DAYS - 1 ))); do
-            TARGET_DATE=$(date -u -d "${i} days ago" +%Y-%m-%d)
-            echo "--- Forecasting for date: ${TARGET_DATE} ---"
-            python -m agents.parent_agent --date "${TARGET_DATE}"
-          done
+          echo "--- Forecasting for date: ${{ matrix.date }} ---"
+          python -m agents.parent_agent --date "${{ matrix.date }}"

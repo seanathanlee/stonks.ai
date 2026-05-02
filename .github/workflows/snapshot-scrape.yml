@@ -3,14 +3,19 @@
 # Stonks.ai — Snapshot Stock Price Scraper (Manual Trigger)
 # ============================================================
 #
-# Triggered manually via workflow_dispatch.  Fetches the last
-# 30 days of daily closing prices for every NASDAQ symbol and
-# bulk-ingests them into the Azure Data Explorer
-# `dailyStockPrice` table.
+# Triggered manually via workflow_dispatch.  Fetches the daily
+# closing price for every NASDAQ symbol for each day in the
+# specified date range and bulk-ingests them into the Azure
+# Data Explorer `dailyStockPrice` table.
+#
+# Each date runs as a separate matrix job, so Azure OIDC
+# authentication is refreshed per date and a failure on one
+# date does not block the remaining dates.
 #
 # Use this workflow to:
 #   • Perform an initial backfill when setting up the cluster.
 #   • Re-seed data after downtime or data loss.
+#   • Resume from a specific date after a partial failure.
 #
 # To also backfill forecast data, run the Snapshot Agent Forecast
 # workflow (snapshot-forecast.yml) after this one completes.
@@ -22,8 +27,6 @@
 #   AZURE_CLIENT_ID       – Service principal / managed identity client ID (OIDC)
 #   AZURE_TENANT_ID       – Azure tenant ID
 #   AZURE_SUBSCRIPTION_ID – Azure subscription ID
-#   AZURE_OPENAI_ENDPOINT – Azure OpenAI endpoint
-#   AZURE_OPENAI_API_KEY  – Azure OpenAI API key
 # ============================================================
 
 name: Snapshot Stock Price Scrape
@@ -32,9 +35,17 @@ name: Snapshot Stock Price Scrape
   workflow_dispatch:
     inputs:
       days:
-        description: "Number of days to back-fill (default: 30)"
+        description: "Number of days to back-fill when start_date is not set (default: 30)"
         required: false
         default: "30"
+        type: string
+      start_date:
+        description: "Start date (YYYY-MM-DD). Overrides 'days' when provided."
+        required: false
+        type: string
+      end_date:
+        description: "End date (YYYY-MM-DD, inclusive). Defaults to today when not set."
+        required: false
         type: string
 
 permissions:
@@ -42,9 +53,39 @@ permissions:
   contents: read
 
 jobs:
-  snapshot-scrape:
-    name: Scrape and ingest price snapshot
+  generate-dates:
+    name: Generate date list
     runs-on: ubuntu-latest
+    outputs:
+      dates: ${{ steps.dates.outputs.dates }}
+    steps:
+      - name: Generate date list
+        id: dates
+        run: |
+          python3 << 'PYEOF'
+          import json, os
+          from datetime import date, timedelta
+
+          start_date = "${{ inputs.start_date }}"
+          end_date = "${{ inputs.end_date }}"
+          days = int("${{ inputs.days }}" or "30")
+
+          end = date.fromisoformat(end_date) if end_date else date.today()
+          start = date.fromisoformat(start_date) if start_date else end - timedelta(days=days - 1)
+
+          dates = [str(start + timedelta(days=i)) for i in range((end - start).days + 1)]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write("dates=" + json.dumps(dates) + "\n")
+          PYEOF
+
+  snapshot-scrape:
+    name: Scrape prices for ${{ matrix.date }}
+    needs: generate-dates
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        date: ${{ fromJson(needs.generate-dates.outputs.dates) }}
+      max-parallel: 1
 
     steps:
       - name: Checkout repository
@@ -66,10 +107,10 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Run snapshot scraper
+      - name: Run snapshot scraper for ${{ matrix.date }}
         env:
           ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
           ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
-          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
-          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
-        run: python -m agents.scraper --mode snapshot --days ${{ inputs.days || '30' }}
+        run: |
+          echo "--- Scraping prices for date: ${{ matrix.date }} ---"
+          python -m agents.scraper --mode snapshot --date "${{ matrix.date }}"
