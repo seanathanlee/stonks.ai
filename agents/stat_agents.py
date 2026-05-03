@@ -11,7 +11,7 @@ Each agent implements a distinct statistical or financial model:
   ets                    – Holt-Winters exponential smoothing
   arima                  – ARIMA(p,1,q) auto-selected by AIC
   garch_volatility       – GARCH(1,1) volatility-adjusted drift
-  monte_carlo            – Geometric Brownian Motion simulation (N=1 000 paths)
+  monte_carlo            – Geometric Brownian Motion simulation (N=1,000 paths)
   capm_beta              – CAPM beta vs equal-weighted cross-sectional proxy
   hmm_regime             – 2-state Hidden Markov Model regime detection
 
@@ -49,6 +49,12 @@ log = logging.getLogger(__name__)
 
 # Minimum number of price data-points required to fit any model.
 MIN_HISTORY = 20
+
+# Number of Monte Carlo price-path simulations per symbol.
+MONTE_CARLO_SIMS = 1_000
+
+# Maximum EM iterations for the HMM fitting step.
+HMM_ITERATIONS = 200
 
 # Horizon labels → approximate number of trading days.
 HORIZONS: dict[str, int] = {
@@ -365,7 +371,7 @@ def _garch_volatility_factory(_price_map: dict[str, list[float]]) -> ModelFn:
 def _monte_carlo_factory(_price_map: dict[str, list[float]]) -> ModelFn:
     def _monte_carlo_model(symbol: str, prices: list[float]) -> dict[str, float]:
         """
-        Geometric Brownian Motion Monte Carlo simulation (N=1 000 paths).
+        Geometric Brownian Motion Monte Carlo simulation (N=1,000 paths).
 
         Estimates mu and sigma from the historical log return series, then
         simulates price paths and reports the median terminal price as the
@@ -381,11 +387,10 @@ def _monte_carlo_factory(_price_map: dict[str, list[float]]) -> ModelFn:
             raise ValueError("Invalid price series for Monte Carlo simulation.")
 
         rng = np.random.default_rng(seed=42)
-        n_sims = 1_000
 
         result: dict[str, float] = {}
         for horizon, days in HORIZONS.items():
-            z = rng.standard_normal((n_sims, days))
+            z = rng.standard_normal((MONTE_CARLO_SIMS, days))
             # GBM log return per step: (mu - 0.5*sigma^2)*dt + sigma*sqrt(dt)*Z
             drift = (mu - 0.5 * sigma**2)
             step_log_rets = drift + sigma * z
@@ -477,7 +482,7 @@ def _hmm_regime_factory(_price_map: dict[str, list[float]]) -> ModelFn:
             model = _hmm.GaussianHMM(
                 n_components=2,
                 covariance_type="full",
-                n_iter=200,
+                n_iter=HMM_ITERATIONS,
                 random_state=42,
             )
             model.fit(log_rets)
