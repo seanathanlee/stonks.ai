@@ -24,6 +24,7 @@ from typing import Any
 
 from agents.adx_client import get_all_symbols, get_price_history, ingest_forecasts, now_utc_iso
 from agents.child_agents import CHILD_AGENTS, run_child_agent
+from agents.stat_agents import STAT_AGENTS, run_stat_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ HORIZON_KEYS = {
     "1y": "expected_return_1y",
 }
 PRICE_HISTORY_DAYS = 30
-MAX_WORKERS = 9  # one worker per child agent
+MAX_WORKERS = 17  # 9 LLM child agents + 8 statistical agents
 
 
 # ---------------------------------------------------------------------------
@@ -155,17 +156,37 @@ def run_parent_agent(as_of_date: date | None = None) -> list[dict[str, Any]]:
     # ------------------------------------------------------------------
     all_forecast_rows: list[dict[str, Any]] = []
 
-    log.info("Running %d child agents concurrently…", len(CHILD_AGENTS))
+    total_agents = len(CHILD_AGENTS) + len(STAT_AGENTS)
+    log.info(
+        "Running %d agents concurrently (%d LLM, %d statistical)…",
+        total_agents,
+        len(CHILD_AGENTS),
+        len(STAT_AGENTS),
+    )
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = {
-            executor.submit(
-                run_child_agent,
-                agent["name"],
-                agent["strategy"],
-                stock_data,
-            ): agent["name"]
-            for agent in CHILD_AGENTS
-        }
+        futures: dict[Any, str] = {}
+
+        # LLM-based child agents
+        for agent in CHILD_AGENTS:
+            futures[
+                executor.submit(
+                    run_child_agent,
+                    agent["name"],
+                    agent["strategy"],
+                    stock_data,
+                )
+            ] = agent["name"]
+
+        # Pure-statistical agents
+        for agent in STAT_AGENTS:
+            futures[
+                executor.submit(
+                    run_stat_agent,
+                    agent.name,
+                    agent.model_fn_factory,
+                    stock_data,
+                )
+            ] = agent.name
 
         for future in as_completed(futures):
             agent_name = futures[future]
