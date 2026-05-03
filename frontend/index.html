@@ -717,50 +717,92 @@ function formatMarkdown(text) {
 
 // ── Agent Roster ───────────────────────────────────────────────────────────
 const AGENTS = [
+  // LLM-based agents
   {
     name: "Momentum Trader",
     icon: "📈",
-    desc: "Buys into strong upward momentum and breakouts. Tracks relative strength and rate of change.",
+    desc: "Buys into strong upward momentum and breakouts. Ranks by risk-adjusted momentum (roc_30d / volatility).",
   },
   {
     name: "Mean Reversion",
     icon: "🔄",
-    desc: "Finds stocks that have fallen below their 30-day average and are likely to bounce back.",
+    desc: "Finds stocks statistically far below their 20-day mean (Z-score < −1.5) that are primed to snap back.",
   },
   {
     name: "Value Investor",
     icon: "💎",
-    desc: "Seeks undervalued blue-chip stocks near multi-month lows with low volatility.",
+    desc: "Combines price signals with fundamental knowledge to uncover stocks with low P/E, P/B, and high free-cash-flow yield.",
+  },
+  {
+    name: "Quality Investor",
+    icon: "🏆",
+    desc: "Targets financially strong companies with high ROE, ROIC, wide margins, and conservative balance sheets.",
+  },
+  {
+    name: "Low Volatility",
+    icon: "🛡️",
+    desc: "Selects stable, low-volatility compounders (annualised vol < 20%) that protect capital while delivering steady gains.",
   },
   {
     name: "Growth Investor",
     icon: "🚀",
-    desc: "Targets high-growth technology, biotech, and consumer names making new highs.",
+    desc: "Targets high-growth companies with strong revenue and EPS expansion making new 30-day highs.",
   },
   {
-    name: "Volatility Hunter",
-    icon: "⚡",
-    desc: "Seeks large intraday or day-over-day price swings for outsized profit potential.",
+    name: "Size Premium",
+    icon: "🔬",
+    desc: "Exploits the small-cap premium by targeting NASDAQ companies with market cap < $2B and positive momentum.",
   },
   {
-    name: "Sector Rotation",
-    icon: "🔃",
-    desc: "Rotates into outperforming NASDAQ sectors by tracking cross-sector price momentum.",
-  },
-  {
-    name: "Technical Analyst",
-    icon: "📊",
-    desc: "Reads cup-and-handle patterns, ascending triangles, golden crosses, and other chart setups.",
+    name: "Dividend Income",
+    icon: "💰",
+    desc: "Seeks high-yield, financially sound dividend payers with sustainable payout ratios and growing distributions.",
   },
   {
     name: "Contrarian Investor",
     icon: "🔀",
-    desc: "Buys beaten-down names against the crowd when underlying fundamentals remain strong.",
+    desc: "Buys beaten-down names against the crowd when underlying fundamentals remain strong and selling pressure is easing.",
+  },
+  // Pure-statistical agents
+  {
+    name: "Momentum Factor",
+    icon: "📐",
+    desc: "Composite price momentum model averaging 5-, 10-, and 20-day rate-of-change to project forward returns.",
   },
   {
-    name: "Risk-Adjusted Optimizer",
+    name: "Historical Volatility",
+    icon: "📉",
+    desc: "Estimates daily drift and annualised volatility from log returns, ranking stocks by their Sharpe proxy.",
+  },
+  {
+    name: "ETS",
+    icon: "〰️",
+    desc: "Holt-Winters additive-trend exponential smoothing that forecasts terminal prices across all four horizons.",
+  },
+  {
+    name: "ARIMA",
+    icon: "🔢",
+    desc: "Auto-selects the best ARIMA(p,1,q) order by AIC and forecasts price levels at each horizon.",
+  },
+  {
+    name: "GARCH Volatility",
+    icon: "📊",
+    desc: "GARCH(1,1) model that estimates conditional daily volatility and ranks by volatility-adjusted expected drift.",
+  },
+  {
+    name: "Monte Carlo",
+    icon: "🎲",
+    desc: "Simulates 1,000 Geometric Brownian Motion price paths and reports the median terminal price as expected return.",
+  },
+  {
+    name: "CAPM Beta",
     icon: "⚖️",
-    desc: "Maximises Sharpe ratio — balancing expected return against recent price volatility.",
+    desc: "Computes CAPM beta against an equal-weighted cross-sectional market proxy and ranks by expected excess return.",
+  },
+  {
+    name: "HMM Regime",
+    icon: "🔭",
+    desc: "Fits a 2-state Gaussian Hidden Markov Model to detect bull/bear regimes and weights returns by regime-transition probability.",
   },
 ];
 
