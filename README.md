@@ -2,7 +2,7 @@
 
 An end-to-end sample that shows how to build, containerize, and deploy a **multi-agent AI system** to **Azure** using GitHub Actions.
 
-The system scrapes NASDAQ stock prices daily, stores them in **Azure Data Explorer (Kusto)**, and runs **9 specialised child agents** (each with a distinct investment philosophy) through a **parent orchestrator agent** to produce ranked stock picks across four time horizons. All forecasts are persisted back to ADX for querying and analysis. An **evaluation agent** then measures how accurately each agent's 1-month forecasts matched actual stock returns, feeding accuracy scores back into ADX and surfacing them in the chat UI.
+The system scrapes NASDAQ stock prices daily, stores them in **Azure Data Explorer (Kusto)**, and runs **17 agents** — 9 LLM-based child agents (each with a distinct investment philosophy) and 8 pure-statistical model agents — through a **parent orchestrator agent** to produce ranked stock picks across four time horizons. All forecasts are persisted back to ADX for querying and analysis. An **evaluation agent** then measures how accurately each agent's 1-month forecasts matched actual stock returns, feeding accuracy scores back into ADX and surfacing them in the chat UI.
 
 ---
 
@@ -16,21 +16,25 @@ stonks.ai/
 │   ├── chat_agent.py         # Conversational chat agent (used by the web UI)
 │   ├── evaluation_agent.py   # Evaluates 1-month forecast accuracy vs actual returns
 │   ├── scraper.py            # NASDAQ symbol list + price fetcher
-│   ├── child_agents.py       # 9 child agent definitions + shared runner
-│   └── parent_agent.py       # Orchestrator: reads ADX, fans out, writes forecasts
+│   ├── child_agents.py       # 9 LLM child agent definitions + shared runner
+│   ├── stat_agents.py        # 8 pure-statistical agent definitions + shared runner
+│   └── parent_agent.py       # Orchestrator: reads ADX, fans out to all 17 agents, writes forecasts
 ├── api/
 │   └── main.py               # FastAPI web application (serves chat UI + REST API)
 ├── frontend/
 │   └── index.html            # Browser chatbot UI (Chart.js, agent roster panel, no build step)
 ├── infra/
+│   ├── acr-only.bicep        # Standalone ACR template (provisioned first by deploy.yml)
 │   ├── main.bicep            # Root Bicep template (AI Services, ADX, ACR, Container App, Static Web App)
 │   └── main.bicepparam       # Default parameter values
 ├── .github/
 │   └── workflows/
-│       ├── deploy.yml             # CI/CD pipeline (infra + backend + frontend deploy)
-│       ├── daily-scrape.yml       # Scheduled daily price ingestion (01:00 UTC)
-│       ├── snapshot-scrape.yml    # Manual 30-day backfill trigger
-│       └── daily-evaluation.yml   # Scheduled daily forecast evaluation (03:00 UTC)
+│       ├── deploy.yml                # CI/CD pipeline (ACR → Docker build → infra → frontend deploy)
+│       ├── daily-scrape.yml          # Scheduled daily price ingestion (01:00 UTC)
+│       ├── snapshot-scrape.yml       # Manual price backfill trigger (configurable date range)
+│       ├── snapshot-forecast.yml     # Manual forecast backfill trigger (configurable date range)
+│       ├── daily-evaluation.yml      # Scheduled daily forecast evaluation (03:00 UTC)
+│       └── snapshot-evaluation.yml   # Manual evaluation backfill trigger (configurable date range)
 ├── tests/
 │   └── e2e/                  # Playwright end-to-end tests (pytest-playwright)
 ├── Dockerfile
@@ -48,7 +52,9 @@ stonks.ai/
 GitHub Actions
     │
     ├─► deploy.yml  (on push to main)
-    │       ├─► Job 1: Deploy Azure infrastructure (Bicep)
+    │       ├─► Job 1: Provision Azure Container Registry (ACR)
+    │       ├─► Job 2: Build Docker image → push to ACR
+    │       ├─► Job 3: Deploy Azure infrastructure (Bicep)
     │       │       └─► Azure AI Services (Azure OpenAI GPT-4o)
     │       │       └─► Azure Data Explorer cluster (stonksaiadx)
     │       │               ├── database: stonksai
@@ -60,36 +66,51 @@ GitHub Actions
     │       │       └─► Azure Container Registry (stonksaiacr)
     │       │       └─► Azure Container App (stonksai-api)
     │       │       └─► Azure Static Web App  (skewthis.com)
-    │       ├─► Job 2: Build Docker image → push to ACR → update Container App
-    │       └─► Job 3: Inject API URL into frontend → deploy to Static Web App
+    │       └─► Job 4: Inject API URL into frontend → deploy to Static Web App
     │
     ├─► daily-scrape.yml  (runs 01:00 UTC every day)
     │       └─► agents/scraper.py --mode daily
     │               └─► Yahoo Finance API  ──► ADX dailyStockPrice
     │
-    ├─► snapshot-scrape.yml  (manual trigger)
+    ├─► snapshot-scrape.yml  (manual trigger, configurable date range)
     │       └─► agents/scraper.py --mode snapshot
-    │               └─► Yahoo Finance API (30 days)  ──► ADX dailyStockPrice
+    │               └─► Yahoo Finance API  ──► ADX dailyStockPrice
     │
-    ├─► agents/parent_agent.py  (run on-demand or on a schedule)
+    ├─► snapshot-forecast.yml  (manual trigger, configurable date range)
+    │       └─► agents/parent_agent.py --date <date>  (matrix job, one per day)
+    │               └─► ADX dailyStockPrice ──► 17 agents ──► ADX agentStockForecast
+    │
+    ├─► agents/parent_agent.py  (run on-demand or via snapshot-forecast.yml)
     │       ├─► ADX dailyStockPriceMV  ──► stock data (30-day window)
-    │       ├─► 9 child agents (concurrent)
+    │       ├─► 9 LLM child agents (concurrent)
     │       │       ├── momentum_trader
     │       │       ├── mean_reversion
     │       │       ├── value_investor
+    │       │       ├── quality_investor
+    │       │       ├── low_volatility
     │       │       ├── growth_investor
-    │       │       ├── volatility_hunter
-    │       │       ├── sector_rotation
-    │       │       ├── technical_analyst
-    │       │       ├── contrarian_investor
-    │       │       └── risk_adjusted_optimizer
-    │       └─► ADX agentStockForecast  (5 picks × 4 horizons × 9 agents)
+    │       │       ├── size_premium
+    │       │       ├── dividend_income
+    │       │       └── contrarian_investor
+    │       ├─► 8 statistical agents (concurrent)
+    │       │       ├── momentum_factor        (composite price momentum)
+    │       │       ├── historical_volatility  (drift/volatility Sharpe proxy)
+    │       │       ├── ets                    (Holt-Winters exponential smoothing)
+    │       │       ├── arima                  (ARIMA(p,1,q) auto-selected by AIC)
+    │       │       ├── garch_volatility       (GARCH(1,1) volatility-adjusted drift)
+    │       │       ├── monte_carlo            (Geometric Brownian Motion, N=1,000 paths)
+    │       │       ├── capm_beta              (CAPM beta vs equal-weighted proxy)
+    │       │       └── hmm_regime             (2-state Hidden Markov Model)
+    │       └─► ADX agentStockForecast  (5 picks × 4 horizons × 17 agents)
     │
-    └─► daily-evaluation.yml  (runs 03:00 UTC every day)
-            └─► agents/evaluation_agent.py
-                    ├─► ADX agentStockForecast  ──► 1-month forecasts from 30 days ago
-                    ├─► ADX dailyStockPriceMV   ──► actual prices over same window
-                    └─► ADX agentStockEvaluation ◄── accuracy scores written back
+    ├─► daily-evaluation.yml  (runs 03:00 UTC every day)
+    │       └─► agents/evaluation_agent.py
+    │               ├─► ADX agentStockForecast  ──► 1-month forecasts from 30 days ago
+    │               ├─► ADX dailyStockPriceMV   ──► actual prices over same window
+    │               └─► ADX agentStockEvaluation ◄── accuracy scores written back
+    │
+    └─► snapshot-evaluation.yml  (manual trigger, configurable date range)
+            └─► agents/evaluation_agent.py --date <date>  (matrix job, one per day)
 
 Browser  ──► api/main.py (FastAPI, rate-limited)
     │               ├── POST /api/chat   ──► agents/chat_agent.py
@@ -141,11 +162,11 @@ Browser  ──► api/main.py (FastAPI, rate-limited)
    ```
 
    The chatbot lets you:
-   - Run the full 9-agent analysis pipeline
+   - Run the full 17-agent analysis pipeline
    - View latest forecasts with inline charts
    - Explore price history for any symbol
    - Compare how different agents rate a specific stock
-   - View the collapsible **Agent Roster** panel with descriptions of all 9 agents
+   - View the collapsible **Agent Roster** panel with descriptions of all 17 agents
    - Check **agent accuracy scores** from the evaluation pipeline
 
 4. **Run the original single agent (CLI)**
@@ -164,6 +185,9 @@ Browser  ──► api/main.py (FastAPI, rate-limited)
 
    ```bash
    python -m agents.parent_agent
+
+   # Optionally pass a historical date to backfill forecasts for that day
+   python -m agents.parent_agent --date 2025-01-15
    ```
 
 7. **Run the evaluation agent (CLI)**
@@ -224,6 +248,7 @@ Then add the following **repository secrets** in GitHub → Settings → Secrets
 | `AZURE_TENANT_ID` | Azure tenant ID |
 | `AZURE_SUBSCRIPTION_ID` | Azure subscription ID |
 | `AZURE_RESOURCE_GROUP` | `rg-stonksai` |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI endpoint, e.g. `https://<resource>.openai.azure.com/` |
 | `AZURE_OPENAI_API_KEY` | Azure OpenAI API key |
 | `ADX_CLUSTER_URI` | ADX cluster URI, e.g. `https://stonksaiadx.eastus.kusto.windows.net` |
 | `ADX_DATABASE` | ADX database name (`stonksai`) |
@@ -242,6 +267,14 @@ After the infrastructure is deployed, trigger the snapshot workflow to backfill 
 
 GitHub → Actions → **Snapshot Stock Price Scrape** → **Run workflow**
 
+Then backfill forecasts for the same window:
+
+GitHub → Actions → **Snapshot Agent Forecast** → **Run workflow**
+
+And optionally backfill evaluations (requires ≥30 days of forecast + price data):
+
+GitHub → Actions → **Snapshot Agent Evaluation** → **Run workflow**
+
 ### 4 — Automated daily workflows
 
 | Workflow | Schedule | What it does |
@@ -249,15 +282,22 @@ GitHub → Actions → **Snapshot Stock Price Scrape** → **Run workflow**
 | `daily-scrape.yml` | 01:00 UTC | Fetches previous day's NASDAQ closing prices → ADX |
 | `daily-evaluation.yml` | 03:00 UTC | Evaluates 1-month forecast accuracy → ADX |
 
-Both workflows can also be triggered manually from the GitHub Actions tab.
+All workflows can also be triggered manually from the GitHub Actions tab. The following workflows are **manual-only** and accept a configurable date range for backfilling:
+
+| Workflow | What it does |
+|----------|--------------|
+| `snapshot-scrape.yml` | Backfills NASDAQ prices for a date range → ADX |
+| `snapshot-forecast.yml` | Runs the 17-agent pipeline for each day in a date range → ADX |
+| `snapshot-evaluation.yml` | Evaluates forecast accuracy for each day in a date range → ADX |
 
 ### 5 — Full CI/CD on push to main
 
-Pushing to `main` triggers `deploy.yml`, which runs three sequential jobs:
+Pushing to `main` triggers `deploy.yml`, which runs four sequential jobs:
 
-1. **Deploy Azure infrastructure** — applies the Bicep template (idempotent).
-2. **Build and deploy backend** — builds the Docker image, pushes it to ACR, and updates the Container App.
-3. **Deploy frontend** — injects the Container App URL into `frontend/index.html` and deploys it to the Azure Static Web App (served at skewthis.com).
+1. **Provision ACR** — creates the Azure Container Registry if it doesn't exist yet.
+2. **Build and push backend** — builds the Docker image and pushes it to ACR.
+3. **Deploy Azure infrastructure** — applies the full Bicep template (idempotent), passing the real image URI so no placeholder image is ever deployed.
+4. **Deploy frontend** — injects the Container App URL into `frontend/index.html` and deploys it to the Azure Static Web App (served at skewthis.com).
 
 ---
 
