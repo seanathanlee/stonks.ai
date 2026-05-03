@@ -67,8 +67,9 @@ fundamentals remain strong.
 • risk_adjusted_optimizer – Maximises Sharpe ratio, balancing expected return \
 against recent price volatility.
 
-Agent evaluations measure how accurately each agent's forecasts matched actual \
-stock returns (lower accuracy score = more accurate). Use get_agent_evaluations \
+Agent evaluations measure each agent's prediction error — how far their \
+forecasts were from actual stock returns. A lower error means the agent was \
+closer to the real outcome (i.e. more accurate). Use get_agent_evaluations \
 to surface this data with visualisations.
 
 Your responsibilities:
@@ -167,10 +168,10 @@ TOOLS: list[dict[str, Any]] = [
         "function": {
             "name": "get_agent_evaluations",
             "description": (
-                "Retrieve accuracy evaluation metrics for each of the 9 child agents, "
-                "showing how well their 1-month forecasts matched actual stock returns. "
-                "The accuracy score is lower-is-better: it measures the combined "
-                "absolute error in both forecasted return and stock rank. "
+                "Retrieve prediction error metrics for each of the 9 child agents, "
+                "showing how closely their forecasts matched actual stock returns. "
+                "The prediction error is lower-is-better: a lower score means the "
+                "agent's forecasts were closer to the actual returns and rank. "
                 "Use this to identify which agents have been most accurate recently."
             ),
             "parameters": {
@@ -312,19 +313,19 @@ def _build_agent_comparison_chart(
 def _build_evaluation_chart(
     evaluations: list[dict[str, Any]], horizon: str
 ) -> dict[str, Any]:
-    """Horizontal bar chart: per-agent accuracy scores (lower = more accurate)."""
+    """Horizontal bar chart: per-agent prediction error (lower = more accurate)."""
     agents = [e["agentName"].replace("_", " ").title() for e in evaluations]
-    scores = [e["avgAccuracyScore"] for e in evaluations]
+    errors = [e["avgAccuracyScore"] for e in evaluations]
     return {
         "id": f"eval_{horizon}_{uuid.uuid4().hex[:8]}",
         "type": "bar",
-        "title": f"Agent Accuracy Scores — {horizon} Horizon (lower = more accurate)",
+        "title": f"Agent Prediction Error — {horizon} Horizon (lower = better)",
         "indexAxis": "y",
         "labels": agents,
         "datasets": [
             {
-                "label": "Avg Accuracy Score",
-                "data": scores,
+                "label": "Avg Prediction Error",
+                "data": errors,
                 "backgroundColor": [
                     _CHART_COLORS[i % len(_CHART_COLORS)] for i in range(len(scores))
                 ],
