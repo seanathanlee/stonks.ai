@@ -395,17 +395,23 @@ def ingest_evaluations(rows: list[dict[str, Any]]) -> None:
     Bulk-ingest rows into the `agentStockEvaluation` table.
 
     Each row must contain:
-        symbol              – stock ticker string
-        forecastReturn      – forecasted % return (float)
-        actualReturn        – realized % return (float)
-        forecastRank        – rank assigned by the forecasting agent (int)
-        actualRank          – rank based on actual returns (int)
-        accuracyScore       – accuracy metric (float)
-        agentName           – name of the forecasting agent (string)
-        forecastReportTime  – ISO-8601 datetime of the original forecast
-        reportTime          – ISO-8601 datetime of this evaluation run
-        runId               – unique ID for this evaluation run (string)
-        horizon             – forecast horizon, e.g. "1m" (string)
+        symbol                – stock ticker string
+        forecastReturn        – forecasted % return (float)
+        actualReturn          – realized % return (float)
+        forecastRank          – rank assigned by the forecasting agent (int)
+        actualRank            – rank based on actual returns (int)
+        accuracyScore         – legacy composite error metric (float, lower = better)
+        returnMAE             – |forecastReturn − actualReturn| (float)
+        returnBias            – forecastReturn − actualReturn, signed (float)
+        directionCorrect      – 1 if predicted direction matched actual, else 0 (int)
+        volatilityAdjustedError – returnMAE / annualised realized volatility (float or null)
+        spearmanRho           – rank correlation for the agent's run (float or null)
+        precisionAt5          – fraction of agent's top-5 in actual top-5 (float or null)
+        agentName             – name of the forecasting agent (string)
+        forecastReportTime    – ISO-8601 datetime of the original forecast
+        reportTime            – ISO-8601 datetime of this evaluation run
+        runId                 – unique ID for this evaluation run (string)
+        horizon               – forecast horizon, e.g. "1m" (string)
     """
     if not rows:
         return
@@ -427,16 +433,19 @@ def get_agent_evaluations(
     """
     Return per-agent accuracy evaluation metrics from the `agentStockEvaluation` table.
 
-    The accuracy score is a lower-is-better error metric: the average of the
-    absolute return error and absolute rank error for each prediction.
-
     Each returned dict contains:
-        agentName           – child agent name
-        avgAccuracyScore    – mean accuracy score (lower = more accurate)
-        runCount            – number of distinct evaluation runs included
-        avgForecastReturn   – mean forecasted % return across evaluated picks
-        avgActualReturn     – mean realized % return across evaluated picks
-        horizon             – the horizon used for filtering
+        agentName              – child agent name
+        avgAccuracyScore       – mean legacy composite error (lower = more accurate)
+        avgReturnMAE           – mean |forecastReturn − actualReturn|
+        avgBias                – mean signed return error (positive = over-optimistic)
+        avgHitRate             – fraction of predictions where direction was correct
+        avgVolatilityAdjError  – mean volatility-adjusted return error
+        avgSpearmanRho         – mean Spearman rank correlation across runs
+        avgPrecisionAt5        – mean fraction of top-5 picks that were actual top-5
+        runCount               – number of distinct evaluation runs included
+        avgForecastReturn      – mean forecasted % return across evaluated picks
+        avgActualReturn        – mean realized % return across evaluated picks
+        horizon                – the horizon used for filtering
     """
     if days < 1:
         raise ValueError(f"days must be a positive integer, got {days!r}")
@@ -449,10 +458,16 @@ agentStockEvaluation
 | where reportTime >= ago({int(days)}d)
 | where horizon == "{horizon}"
 {agent_filter}
-| summarize avgAccuracyScore = round(avg(accuracyScore), 4),
-            runCount = dcount(runId),
-            avgForecastReturn = round(avg(forecastReturn), 2),
-            avgActualReturn = round(avg(actualReturn), 2) by agentName
+| summarize avgAccuracyScore       = round(avg(accuracyScore), 4),
+            avgReturnMAE           = round(avg(returnMAE), 4),
+            avgBias                = round(avg(returnBias), 4),
+            avgHitRate             = round(avg(todouble(directionCorrect)), 4),
+            avgVolatilityAdjError  = round(avg(volatilityAdjustedError), 4),
+            avgSpearmanRho         = round(avg(spearmanRho), 4),
+            avgPrecisionAt5        = round(avg(precisionAt5), 4),
+            runCount               = dcount(runId),
+            avgForecastReturn      = round(avg(forecastReturn), 2),
+            avgActualReturn        = round(avg(actualReturn), 2) by agentName
 | order by avgAccuracyScore asc
 """
     client = _get_kusto_client()
@@ -461,6 +476,18 @@ agentStockEvaluation
         {
             "agentName": row["agentName"],
             "avgAccuracyScore": float(row["avgAccuracyScore"]),
+            "avgReturnMAE": float(row["avgReturnMAE"]),
+            "avgBias": float(row["avgBias"]),
+            "avgHitRate": float(row["avgHitRate"]),
+            "avgVolatilityAdjError": float(row["avgVolatilityAdjError"])
+            if row["avgVolatilityAdjError"] is not None
+            else None,
+            "avgSpearmanRho": float(row["avgSpearmanRho"])
+            if row["avgSpearmanRho"] is not None
+            else None,
+            "avgPrecisionAt5": float(row["avgPrecisionAt5"])
+            if row["avgPrecisionAt5"] is not None
+            else None,
             "runCount": int(row["runCount"]),
             "avgForecastReturn": float(row["avgForecastReturn"]),
             "avgActualReturn": float(row["avgActualReturn"]),
