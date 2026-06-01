@@ -1,0 +1,138 @@
+---
+# ============================================================
+# Stonks.ai — Agent Rebalance Trade (Manual Trigger)
+# ============================================================
+#
+# Executes a one-shot rebalance that:
+#   1) pulls latest top picks (default: top 5, horizon 1m),
+#   2) liquidates current holdings,
+#   3) buys selected symbols with equal notional allocation.
+#
+# Supports:
+#   - paper broker mode for safe testing,
+#   - robinhood/http mode via configurable broker endpoints.
+#
+# Required secrets for robinhood/http mode:
+#   ADX_CLUSTER_URI       – ADX cluster URI
+#   ADX_DATABASE          – ADX database name (default: stonksai)
+#   AZURE_CLIENT_ID       – Service principal / managed identity client ID (OIDC)
+#   AZURE_TENANT_ID       – Azure tenant ID
+#   AZURE_SUBSCRIPTION_ID – Azure subscription ID
+#   BROKER_API_TOKEN      – Broker API bearer token
+#   BROKER_ACCOUNT_ID     – Broker account id
+#
+# Required variable for robinhood/http mode:
+#   BROKER_API_BASE_URL   – Broker API base URL
+#
+# Optional for paper mode:
+#   PAPER_CASH            – Starting cash value
+#   PAPER_HOLDINGS_JSON   – JSON array of holdings
+# ============================================================
+
+name: Agent Rebalance Trade
+
+"on":
+  workflow_dispatch:
+    inputs:
+      broker_provider:
+        description: "Broker provider"
+        required: false
+        default: "paper"
+        type: choice
+        options:
+          - paper
+          - robinhood
+      horizon:
+        description: "Forecast horizon"
+        required: false
+        default: "1m"
+        type: choice
+        options:
+          - 1m
+          - 3m
+          - 6m
+          - 1y
+      top_n:
+        description: "Top symbols to select"
+        required: false
+        default: "5"
+        type: string
+      dry_run:
+        description: "Run without submitting real orders"
+        required: false
+        default: true
+        type: boolean
+      min_cash_threshold:
+        description: "Minimum liquidation value required"
+        required: false
+        default: "100"
+        type: string
+      max_order_notional:
+        description: "Max notional per buy order"
+        required: false
+        default: "100000"
+        type: string
+      retries:
+        description: "Order submission retries"
+        required: false
+        default: "3"
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  rebalance:
+    name: Execute rebalance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run rebalance agent
+        env:
+          ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
+          ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
+          BROKER_PROVIDER: ${{ inputs.broker_provider }}
+          BROKER_API_BASE_URL: ${{ vars.BROKER_API_BASE_URL }}
+          BROKER_ACCOUNT_ID: ${{ secrets.BROKER_ACCOUNT_ID }}
+          BROKER_API_TOKEN: ${{ secrets.BROKER_API_TOKEN }}
+          PAPER_CASH: ${{ vars.PAPER_CASH }}
+          PAPER_HOLDINGS_JSON: ${{ vars.PAPER_HOLDINGS_JSON }}
+          REBALANCE_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          REBALANCE_AUDIT_LOG_PATH: /tmp/rebalance_audit.jsonl
+        run: |
+          python -m agents.rebalance_agent \
+            --broker-provider "${{ inputs.broker_provider }}" \
+            --horizon "${{ inputs.horizon }}" \
+            --top-n "${{ inputs.top_n }}" \
+            --min-cash-threshold "${{ inputs.min_cash_threshold }}" \
+            --max-order-notional "${{ inputs.max_order_notional }}" \
+            --retries "${{ inputs.retries }}" \
+            ${{ inputs.dry_run && '--dry-run' || '--no-dry-run' }}
+
+      - name: Upload rebalance audit log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebalance-audit-${{ github.run_id }}
+          path: /tmp/rebalance_audit.jsonl
+          if-no-files-found: warn

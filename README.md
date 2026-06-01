@@ -34,7 +34,8 @@ stonks.ai/
 │       ├── snapshot-scrape.yml       # Manual price backfill trigger (configurable date range)
 │       ├── snapshot-forecast.yml     # Manual forecast backfill trigger (configurable date range)
 │       ├── daily-evaluation.yml      # Scheduled daily forecast evaluation (03:00 UTC)
-│       └── snapshot-evaluation.yml   # Manual evaluation backfill trigger (configurable date range)
+│       ├── snapshot-evaluation.yml   # Manual evaluation backfill trigger (configurable date range)
+│       └── agent-rebalance-trade.yml # Manual top-picks rebalance executor
 ├── tests/
 │   └── e2e/                  # Playwright end-to-end tests (pytest-playwright)
 ├── Dockerfile
@@ -289,6 +290,7 @@ All workflows can also be triggered manually from the GitHub Actions tab. The fo
 | `snapshot-scrape.yml` | Backfills NASDAQ prices for a date range → ADX |
 | `snapshot-forecast.yml` | Runs the 17-agent pipeline for each day in a date range → ADX |
 | `snapshot-evaluation.yml` | Evaluates forecast accuracy for each day in a date range → ADX |
+| `agent-rebalance-trade.yml` | Runs a top-5 rebalance: liquidate holdings, then buy equal-weight picks |
 
 ### 5 — Full CI/CD on push to main
 
@@ -298,6 +300,40 @@ Pushing to `main` triggers `deploy.yml`, which runs four sequential jobs:
 2. **Build and push backend** — builds the Docker image and pushes it to ACR.
 3. **Deploy Azure infrastructure** — applies the full Bicep template (idempotent), passing the real image URI so no placeholder image is ever deployed.
 4. **Deploy frontend** — injects the Container App URL into `frontend/index.html` and deploys it to the Azure Static Web App (served at skewthis.com).
+
+### 6 — Manual portfolio rebalance workflow
+
+Use **Agent Rebalance Trade** (`agent-rebalance-trade.yml`) to execute a one-off rebalance based on the latest aggregated agent forecasts.
+
+By default the workflow:
+- Selects the **top 5 symbols** for the **1-month (`1m`) horizon** from `agentStockForecastMV`.
+- Sells all currently held symbols in the target broker account.
+- Buys the selected 5 symbols using equal notional allocation.
+
+Guardrails:
+- **Dry run** mode (default) to simulate without placing real orders.
+- **Fail-fast** if fewer than 5 picks are available.
+- **Minimum cash threshold** to block very small rebalances.
+- **Max order notional** cap per buy order.
+- **Retry count** for order submission failures.
+- Deterministic **client order IDs** (`REBALANCE_RUN_ID`) for idempotency at the broker layer.
+
+Required secrets/variables for `robinhood`/`http` provider mode:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `BROKER_API_TOKEN` | Secret | API token used to call broker trading endpoints |
+| `BROKER_ACCOUNT_ID` | Secret | Broker account identifier |
+| `BROKER_API_BASE_URL` | Variable | Broker API base URL |
+
+Optional paper-mode variables:
+
+| Name | Type | Description |
+|------|------|-------------|
+| `PAPER_CASH` | Variable | Starting cash used by the paper broker |
+| `PAPER_HOLDINGS_JSON` | Variable | JSON array of holdings (`symbol`, `quantity`, `market_price`/`market_value`) |
+
+The workflow writes a structured JSONL audit log (`/tmp/rebalance_audit.jsonl`) and uploads it as a workflow artifact.
 
 ---
 
@@ -372,4 +408,3 @@ You can ask the chat UI "Which agents have been most accurate?" to get an inline
 ## Security
 
 See [SECURITY.md](SECURITY.md) for security reporting guidance.
-
