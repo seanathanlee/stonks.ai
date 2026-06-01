@@ -110,7 +110,7 @@ jobs:
       - name: Run rebalance agent
         env:
           ADX_CLUSTER_URI: ${{ secrets.ADX_CLUSTER_URI }}
-          ADX_DATABASE: ${{ secrets.ADX_DATABASE || 'stonksai' }}
+          ADX_DATABASE: ${{ secrets.ADX_DATABASE || vars.ADX_DATABASE || 'stonksai' }}
           BROKER_PROVIDER: ${{ inputs.broker_provider }}
           BROKER_API_BASE_URL: ${{ vars.BROKER_API_BASE_URL }}
           BROKER_ACCOUNT_ID: ${{ secrets.BROKER_ACCOUNT_ID }}

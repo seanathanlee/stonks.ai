@@ -112,11 +112,14 @@ def build_rebalance_plan(
     *,
     snapshot: AccountSnapshot,
     target_symbols: list[str],
+    min_target_symbols: int = DEFAULT_TOP_N,
     min_cash_threshold: float,
     max_order_notional: float,
 ) -> dict[str, Any]:
-    if len(target_symbols) < DEFAULT_TOP_N:
-        raise RebalanceError("Need at least 5 target symbols for rebalance.")
+    if len(target_symbols) < min_target_symbols:
+        raise RebalanceError(
+            f"Need at least {min_target_symbols} target symbols for rebalance."
+        )
     if max_order_notional <= 0:
         raise RebalanceError("max_order_notional must be > 0.")
 
@@ -331,6 +334,7 @@ def run_rebalance(
     plan = build_rebalance_plan(
         snapshot=snapshot,
         target_symbols=symbols,
+        min_target_symbols=top_n,
         min_cash_threshold=min_cash_threshold,
         max_order_notional=max_order_notional,
     )
@@ -388,7 +392,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--audit-log-path",
-        default=os.environ.get("REBALANCE_AUDIT_LOG_PATH", "/tmp/rebalance_audit.jsonl"),
+        default=os.environ.get("REBALANCE_AUDIT_LOG_PATH", "rebalance_audit.jsonl"),
     )
     parser.add_argument(
         "--run-id",
