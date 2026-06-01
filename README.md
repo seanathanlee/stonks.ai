@@ -301,39 +301,73 @@ Pushing to `main` triggers `deploy.yml`, which runs four sequential jobs:
 3. **Deploy Azure infrastructure** — applies the full Bicep template (idempotent), passing the real image URI so no placeholder image is ever deployed.
 4. **Deploy frontend** — injects the Container App URL into `frontend/index.html` and deploys it to the Azure Static Web App (served at skewthis.com).
 
-### 6 — Manual portfolio rebalance workflow
+### 6 — Agentic Trading (Robinhood MCP)
 
-Use **Agent Rebalance Trade** (`agent-rebalance-trade.yml`) to execute a one-off rebalance based on the latest aggregated agent forecasts.
+Setting up a Robinhood Agentic Trading account lets you automate trading through a connected third-party AI agent via the Robinhood Trading MCP.
 
-By default the workflow:
-- Selects the **top 5 symbols** for the **1-month (`1m`) horizon** from `agentStockForecastMV`.
-- Sells all currently held symbols in the target broker account.
-- Buys the selected 5 symbols using equal notional allocation.
+#### What is MCP?
+Model Context Protocol (MCP) is an open standard that lets AI agents connect to external apps and services and take actions on your behalf.
 
-Guardrails:
-- **Dry run** mode (default) to simulate without placing real orders.
-- **Fail-fast** if fewer than 5 picks are available.
-- **Minimum cash threshold** to block very small rebalances.
-- **Max order notional** cap per buy order.
-- **Retry count** for order submission failures.
-- Deterministic **client order IDs** (`REBALANCE_RUN_ID`) for idempotency at the broker layer.
+#### What your agent can do
+Your agent can access account context (portfolio value, buying power, balances, transactions) and help place orders with supported order types in your Agentic account.
 
-Required secrets/variables for `robinhood`/`http` provider mode:
+Example workflows include:
+- Build portfolios from market/news context.
+- Automate strategy triggers.
+- Rebalance allocations.
+- Analyze portfolio risks.
+- Analyze market moves and bullish/bearish theses.
 
-| Name | Type | Description |
-|------|------|-------------|
-| `BROKER_API_TOKEN` | Secret | API token used to call broker trading endpoints |
-| `BROKER_ACCOUNT_ID` | Secret | Broker account identifier |
-| `BROKER_API_BASE_URL` | Variable | Broker API base URL |
+> These examples are informational only and are not recommendations.
 
-Optional paper-mode variables:
+#### Risks
+You are responsible for all trades your AI agent places. If you enable unattended actions, your agent can place trades without per-order confirmation. Monitor activity and review disclosures.
 
-| Name | Type | Description |
-|------|------|-------------|
-| `PAPER_CASH` | Variable | Starting cash used by the paper broker |
-| `PAPER_HOLDINGS_JSON` | Variable | JSON array of holdings (`symbol`, `quantity`, `market_price`/`market_value`) |
+#### What your agent can access
+When connected to Robinhood Trading MCP, your agent has read access to:
+- All Robinhood accounts (including account numbers)
+- Position and balance details
+- Transaction and order history
 
-The workflow writes a structured JSONL audit log (`/tmp/rebalance_audit.jsonl`) and uploads it as a workflow artifact.
+> Your agent can place trades only in your Robinhood Agentic account.
+
+#### Connect your AI agent
+Agentic Trading is rolling out and may not yet be available to all users.
+
+Robinhood Trading MCP endpoint:
+- `https://agent.robinhood.com/mcp/trading`
+
+Supported platform setup examples:
+- **Claude Code**: `claude mcp add robinhood-trading --transport http https://agent.robinhood.com/mcp/trading`, then `/mcp` and authenticate
+- **Claude Desktop**: Settings → Connectors → Add custom connector
+- **ChatGPT**: Developer Mode → Settings → Apps → Create app
+- **Codex**: Settings → MCP servers → Streamable HTTP
+- **Codex CLI**: `codex mcp add robinhood-trading --url https://agent.robinhood.com/mcp/trading`, then `/mcp`
+- **Cursor**: Settings → Cursor Settings → Tools & MCPs → Connect
+- **Other MCP-capable platforms**: use the same MCP endpoint
+
+#### Open an Agentic account
+To open a Robinhood Agentic account:
+1. Maintain a primary individual investing account in good standing.
+2. Complete onboarding after connecting to Robinhood Trading MCP.
+3. Authenticate your AI agent and follow on-screen account setup.
+
+> Agentic account opening and authentication must be completed on desktop.
+
+#### Troubleshooting
+- Confirm your platform is connected to Robinhood Trading MCP.
+- Disconnect/reconnect MCP integration if connection issues occur.
+- Follow your AI platform’s debugging docs.
+- If the agent reports Robinhood-side errors, contact Robinhood support.
+
+#### Disclosures
+Robinhood Agentic Trading is a brokerage product that enables a third-party AI agent to automate investment decisions and order placement in a dedicated account. Trades may execute without direct per-trade input.
+
+Agentic trading involves significant risk, including possible total loss. AI strategies may fail in changing market conditions, act quickly, and be hard to monitor or stop in real time.
+
+AI agents can make errors, misinterpret instructions, use incomplete/outdated information, and behave unexpectedly. Robinhood does not guarantee agent output accuracy or suitability. You remain responsible for monitoring account activity and agent behavior.
+
+You assume risk for AI-executed trades and any use of your data by third-party AI providers. Brokerage services are offered through Robinhood Financial LLC (member SIPC) and clearing through Robinhood Securities, LLC (member SIPC).
 
 ---
 
