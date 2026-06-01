@@ -80,6 +80,19 @@ class TestBuildRebalancePlan:
                 max_order_notional=1000.0,
             )
 
+    def test_market_value_takes_precedence_over_market_price(self):
+        snapshot = AccountSnapshot(
+            cash=0.0,
+            holdings=[Holding(symbol="TSLA", quantity=1, market_price=10.0, market_value=50.0)],
+        )
+        plan = build_rebalance_plan(
+            snapshot=snapshot,
+            target_symbols=["AAPL", "MSFT", "NVDA", "AMZN", "META"],
+            min_cash_threshold=0.0,
+            max_order_notional=1000.0,
+        )
+        assert plan["estimated_liquidation_value"] == pytest.approx(50.0)
+
     def test_fails_when_holding_missing_price_and_value(self):
         snapshot = AccountSnapshot(cash=100.0, holdings=[Holding(symbol="TSLA", quantity=1)])
         with pytest.raises(RebalanceError):

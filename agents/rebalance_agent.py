@@ -4,6 +4,7 @@ import argparse
 import json
 import logging
 import os
+import time
 import uuid
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -78,6 +79,11 @@ class AuditLog:
 
 def _normalize_symbol(symbol: str) -> str:
     return symbol.strip().upper()
+
+
+def _safe_id_fragment(value: str) -> str:
+    allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+    return "".join(ch if ch in allowed else "-" for ch in value)
 
 
 def select_top_symbols(*, horizon: str, top_n: int) -> list[str]:
@@ -176,11 +182,13 @@ def _submit_order_with_retry(
     max_retries: int,
 ) -> OrderResult:
     last_exc: Exception | None = None
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
         try:
             return broker.submit_order(order)
         except Exception as exc:
             last_exc = exc
+            if attempt < max_retries - 1:
+                time.sleep(2**attempt)
     raise RebalanceError(f"Order failed after {max_retries} attempts: {order}") from last_exc
 
 
@@ -203,7 +211,11 @@ def execute_rebalance_plan(
             symbol=_normalize_symbol(str(payload["symbol"])),
             quantity=float(payload["quantity"]) if payload.get("quantity") is not None else None,
             notional=float(payload["notional"]) if payload.get("notional") is not None else None,
-            client_order_id=f"{run_id}-{serial}-{payload['side']}-{payload['symbol']}",
+            client_order_id=(
+                f"{_safe_id_fragment(run_id)}-{serial}-"
+                f"{_safe_id_fragment(str(payload['side']))}-"
+                f"{_safe_id_fragment(str(payload['symbol']))}"
+            ),
         )
 
         if dry_run:
@@ -358,8 +370,11 @@ def run_rebalance(
     summary = audit.summary_markdown()
     print(summary)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
-        with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
-            fh.write(summary)
+        try:
+            with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as fh:
+                fh.write(summary)
+        except OSError as exc:
+            log.warning("Failed to write GITHUB_STEP_SUMMARY: %s", exc)
 
     return {
         "run_id": run_id,

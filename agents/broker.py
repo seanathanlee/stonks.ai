@@ -87,6 +87,12 @@ class HttpBrokerClient(BrokerClient):
         holdings_path_template: str = "/accounts/{account_id}/holdings",
         orders_path_template: str = "/accounts/{account_id}/orders",
         timeout_seconds: int = 30,
+        cash_fields: tuple[str, ...] = (
+            "cash",
+            "buying_power",
+            "available_cash",
+            "withdrawable_cash",
+        ),
     ):
         self._base_url = base_url.rstrip("/")
         self._account_id = account_id
@@ -94,6 +100,7 @@ class HttpBrokerClient(BrokerClient):
         self._holdings_path_template = holdings_path_template
         self._orders_path_template = orders_path_template
         self._timeout_seconds = timeout_seconds
+        self._cash_fields = cash_fields
         self._session = requests.Session()
         self._session.headers.update(
             {
@@ -107,7 +114,7 @@ class HttpBrokerClient(BrokerClient):
         return f"{self._base_url}{template.format(account_id=self._account_id)}"
 
     def _extract_cash(self, payload: dict[str, Any]) -> float:
-        for key in ("cash", "buying_power", "available_cash", "withdrawable_cash"):
+        for key in self._cash_fields:
             if key in payload and payload[key] is not None:
                 return float(payload[key])
         raise ValueError("Account payload missing cash/buying power fields.")
@@ -139,13 +146,25 @@ class HttpBrokerClient(BrokerClient):
         return holdings
 
     def get_account_snapshot(self) -> AccountSnapshot:
-        account_resp = self._session.get(self._url(self._account_path_template), timeout=self._timeout_seconds)
-        account_resp.raise_for_status()
-        account_payload = account_resp.json()
+        try:
+            account_resp = self._session.get(
+                self._url(self._account_path_template),
+                timeout=self._timeout_seconds,
+            )
+            account_resp.raise_for_status()
+            account_payload = account_resp.json()
+        except Exception as exc:
+            raise RuntimeError("Failed to fetch broker account snapshot.") from exc
 
-        holdings_resp = self._session.get(self._url(self._holdings_path_template), timeout=self._timeout_seconds)
-        holdings_resp.raise_for_status()
-        holdings_payload = holdings_resp.json()
+        try:
+            holdings_resp = self._session.get(
+                self._url(self._holdings_path_template),
+                timeout=self._timeout_seconds,
+            )
+            holdings_resp.raise_for_status()
+            holdings_payload = holdings_resp.json()
+        except Exception as exc:
+            raise RuntimeError("Failed to fetch broker holdings.") from exc
 
         return AccountSnapshot(
             cash=self._extract_cash(account_payload),
