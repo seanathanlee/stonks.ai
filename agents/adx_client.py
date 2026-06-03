@@ -26,6 +26,8 @@ from azure.kusto.ingest import (
     QueuedIngestClient,
 )
 
+from agents.horizons import ALL_HORIZONS
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -33,6 +35,15 @@ from azure.kusto.ingest import (
 
 _kusto_client: KustoClient | None = None
 _ingest_client: QueuedIngestClient | None = None
+_credential: DefaultAzureCredential | None = None
+
+
+def _get_credential() -> DefaultAzureCredential:
+    """Return a shared DefaultAzureCredential instance (caches tokens internally)."""
+    global _credential
+    if _credential is None:
+        _credential = DefaultAzureCredential()
+    return _credential
 
 
 def _cluster_uri() -> str:
@@ -49,9 +60,8 @@ def _database() -> str:
 def _get_kusto_client() -> KustoClient:
     global _kusto_client
     if _kusto_client is None:
-        credential = DefaultAzureCredential()
         kcsb = KustoConnectionStringBuilder.with_azure_token_credential(
-            _cluster_uri(), credential
+            _cluster_uri(), _get_credential()
         )
         _kusto_client = KustoClient(kcsb)
     return _kusto_client
@@ -62,9 +72,8 @@ def _get_ingest_client() -> QueuedIngestClient:
     if _ingest_client is None:
         # Ingest endpoint uses a different subdomain
         ingest_uri = _cluster_uri().replace("https://", "https://ingest-", 1)
-        credential = DefaultAzureCredential()
         kcsb = KustoConnectionStringBuilder.with_azure_token_credential(
-            ingest_uri, credential
+            ingest_uri, _get_credential()
         )
         _ingest_client = QueuedIngestClient(kcsb)
     return _ingest_client
@@ -218,6 +227,59 @@ def ingest_forecasts(rows: list[dict[str, Any]]) -> None:
     _get_ingest_client().ingest_from_stream(stream, ingestion_properties=props)
 
 
+def get_all_price_history(
+    days: int = 30, as_of_date: str | None = None
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Fetch price history for *all* symbols in a single ADX query.
+
+    This is a more efficient alternative to calling ``get_all_symbols``
+    followed by ``get_price_history``, as it halves the number of round
+    trips to ADX.
+
+    Args:
+        days: Number of days to look back.
+        as_of_date: Optional ISO-8601 date (YYYY-MM-DD).  When provided, the
+            look-back window ends at midnight of this date rather than "now".
+
+    Returns a dict keyed by symbol, each value being a list of records:
+        {"date": "2024-01-15", "price": 182.50}
+    sorted chronologically (oldest first).
+    """
+    if days < 1:
+        raise ValueError(f"days must be a positive integer, got {days!r}")
+    if as_of_date is not None:
+        _validate_iso_date(as_of_date, "as_of_date")
+        end = _as_of_datetime(as_of_date)
+        where_clause = f"priceDate >= {end} - {int(days)}d and priceDate <= {end}"
+    else:
+        where_clause = f"priceDate >= ago({int(days)}d)"
+
+    query = f"""
+dailyStockPriceMV
+| where {where_clause}
+| project priceDate, symbol, price
+| order by priceDate asc
+"""
+    client = _get_kusto_client()
+    response = client.execute(_database(), query)
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    for row in response.primary_results[0]:
+        symbol = row["symbol"]
+        if symbol not in result:
+            result[symbol] = []
+        result[symbol].append(
+            {
+                "date": row["priceDate"].strftime("%Y-%m-%d")
+                if hasattr(row["priceDate"], "strftime")
+                else str(row["priceDate"]),
+                "price": float(row["price"]),
+            }
+        )
+    return result
+
+
 def get_latest_forecasts(
     horizon: str = "1m",
     symbol: str | None = None,
@@ -233,8 +295,8 @@ def get_latest_forecasts(
         agentCount    – number of agents that included this symbol
         horizon       – the horizon used for filtering
     """
-    if horizon not in ("1m", "3m", "6m", "1y"):
-        raise ValueError(f"Invalid horizon: {horizon!r}. Must be one of 1m, 3m, 6m, 1y.")
+    if horizon not in ALL_HORIZONS:
+        raise ValueError(f"Invalid horizon: {horizon!r}. Must be one of {', '.join(ALL_HORIZONS)}.")
     if top_n < 1:
         raise ValueError(f"top_n must be a positive integer, got {top_n!r}")
 
@@ -449,8 +511,8 @@ def get_agent_evaluations(
     """
     if days < 1:
         raise ValueError(f"days must be a positive integer, got {days!r}")
-    if horizon not in ("1m", "3m", "6m", "1y"):
-        raise ValueError(f"Invalid horizon: {horizon!r}. Must be one of 1m, 3m, 6m, 1y.")
+    if horizon not in ALL_HORIZONS:
+        raise ValueError(f"Invalid horizon: {horizon!r}. Must be one of {', '.join(ALL_HORIZONS)}.")
 
     agent_filter = f'| where agentName == "{agent_name}"' if agent_name else ""
     query = f"""

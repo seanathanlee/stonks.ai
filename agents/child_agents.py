@@ -4,11 +4,7 @@ Nine independent child agents, each embodying a distinct investment philosophy.
 
 Each agent receives pre-computed quantitative signals derived from 30 days of
 NASDAQ price history and returns exactly 5 ranked stock picks with expected
-returns for four horizons:
-  1m  – 1 month
-  3m  – 3 months
-  6m  – 6 months
-  1y  – 1 year
+returns for the 1-month horizon.
 
 Signals are computed in Python before being passed to the LLM, so the model
 focuses on strategy reasoning and ranking rather than raw arithmetic.
@@ -29,6 +25,8 @@ import time
 from typing import Any
 
 from openai import APIStatusError, AzureOpenAI, RateLimitError
+
+from agents.horizons import FORECAST_HORIZONS, HORIZON_RETURN_KEYS
 
 log = logging.getLogger(__name__)
 
@@ -298,72 +296,83 @@ def _compute_signals(symbol: str, history: list[dict[str, Any]]) -> dict[str, An
 # Shared agent runner
 # ---------------------------------------------------------------------------
 
-_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "picks": {
-            "type": "array",
-            "description": "Exactly 5 stock picks, ranked 1 (best) to 5.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "rank": {"type": "integer"},
-                    "symbol": {"type": "string"},
-                    "expected_return_1m": {
-                        "type": "number",
-                        "description": "Expected % return over 1 month.",
-                    },
-                    "expected_return_3m": {
-                        "type": "number",
-                        "description": "Expected % return over 3 months.",
-                    },
-                    "expected_return_6m": {
-                        "type": "number",
-                        "description": "Expected % return over 6 months.",
-                    },
-                    "expected_return_1y": {
-                        "type": "number",
-                        "description": "Expected % return over 1 year.",
-                    },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "Brief rationale for this pick.",
-                    },
-                },
-                "required": [
-                    "rank",
-                    "symbol",
-                    "expected_return_1m",
-                    "expected_return_3m",
-                    "expected_return_6m",
-                    "expected_return_1y",
-                    "reasoning",
-                ],
-            },
-            "minItems": 5,
-            "maxItems": 5,
-        }
-    },
-    "required": ["picks"],
-}
 
+def _build_response_schema() -> dict[str, Any]:
+    """Build the submit_picks JSON schema dynamically from FORECAST_HORIZONS."""
+    horizon_properties = {
+        HORIZON_RETURN_KEYS[h]: {
+            "type": "number",
+            "description": f"Expected % return over {h}.",
+        }
+        for h in FORECAST_HORIZONS
+    }
+    required_return_keys = list(HORIZON_RETURN_KEYS.values())
+    return {
+        "type": "object",
+        "properties": {
+            "picks": {
+                "type": "array",
+                "description": "Exactly 5 stock picks, ranked 1 (best) to 5.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "rank": {"type": "integer"},
+                        "symbol": {"type": "string"},
+                        **horizon_properties,
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Brief rationale for this pick.",
+                        },
+                    },
+                    "required": ["rank", "symbol"] + required_return_keys + ["reasoning"],
+                },
+                "minItems": 5,
+                "maxItems": 5,
+            }
+        },
+        "required": ["picks"],
+    }
+
+
+_RESPONSE_SCHEMA = _build_response_schema()
+
+_horizons_str = ", ".join(FORECAST_HORIZONS)
 _SUBMIT_TOOL = {
     "type": "function",
     "function": {
         "name": "submit_picks",
         "description": (
-            "Submit exactly 5 ranked stock picks with expected returns for "
-            "1-month, 3-month, 6-month, and 1-year horizons."
+            f"Submit exactly 5 ranked stock picks with expected returns for "
+            f"the {_horizons_str} horizon(s)."
         ),
         "parameters": _RESPONSE_SCHEMA,
     },
 }
 
 
+def compute_all_signals(
+    stock_data: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """
+    Pre-compute quantitative signals for all symbols in *stock_data*.
+
+    Calling this once and passing the result to ``run_child_agent`` via the
+    ``precomputed_signals`` keyword argument avoids redundant signal
+    computation when multiple child agents share the same price data.
+    """
+    return [
+        _compute_signals(symbol, history)
+        for symbol, history in stock_data.items()
+        if history
+    ]
+
+
 def run_child_agent(
     name: str,
     strategy_prompt: str,
     stock_data: dict[str, list[dict[str, Any]]],
+    *,
+    precomputed_signals: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run a single child agent and return its 5 picks.
@@ -374,18 +383,22 @@ def run_child_agent(
     strategy_prompt: System prompt describing the investment philosophy,
                      selection criteria, ranking logic, and return estimates.
     stock_data:      {symbol: [{"date": str, "price": float}, ...]} for all symbols.
+    precomputed_signals:
+                     Optional pre-computed signals list (from ``compute_all_signals``).
+                     When provided the per-symbol signal computation is skipped,
+                     which avoids redundant work when several child agents share
+                     the same price dataset.
 
     Returns
     -------
     List of pick dicts, each containing:
-        symbol, rank, expected_return_1m/3m/6m/1y, reasoning
+        symbol, rank, expected_return_<horizon>, reasoning
     """
-    # Pre-compute quantitative signals for every symbol so the LLM reasons
-    # over structured metrics rather than raw price lists.
-    signals: list[dict[str, Any]] = []
-    for symbol, history in stock_data.items():
-        if history:
-            signals.append(_compute_signals(symbol, history))
+    # Use pre-computed signals when available; otherwise compute them now.
+    if precomputed_signals is not None:
+        signals = precomputed_signals
+    else:
+        signals = compute_all_signals(stock_data)
 
     # Check the in-process cache before hitting the LLM.
     cache_key = (name, _signals_hash(signals))
@@ -410,7 +423,7 @@ def run_child_agent(
                 "Apply your strategy's selection criteria to these signals. Where your strategy "
                 "requires fundamental data (P/E, ROE, revenue growth, etc.), apply your own "
                 "knowledge of each company's fundamentals. Then call the submit_picks tool with "
-                "your top 5 ranked stocks and expected percentage returns.\n\n"
+                "your top 5 ranked stocks and expected percentage return for the 1-month horizon.\n\n"
                 f"SIGNALS:\n{signals_text}"
             ),
         },
@@ -487,9 +500,9 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "Stocks with the best risk-adjusted momentum get the highest ranks. "
             "Break ties by higher roc_10d.\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- roc_30d = +8%: 1m ≈ +4 to +8%, 3m ≈ +8 to +12%, 6m ≈ +10 to +18%, 1y ≈ +12 to +25%\n"
+            "- roc_30d = +8%: 1m ≈ +4 to +8%\n"
             "- Scale linearly with the observed roc_30d value.\n"
-            "- Dampen 3m/6m/1y estimates by ~20% if rsi_14 > 65 (mean reversion risk at extended levels)."
+            "- Dampen 1m estimate by ~20% if rsi_14 > 65 (mean reversion risk at extended levels)."
         ),
     },
     # -----------------------------------------------------------------------
@@ -517,7 +530,7 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "Higher absolute Z-score combined with lower volatility = cleaner, more predictable rebound. "
             "Break ties by lower rsi_14 (more oversold).\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- zscore_20d = -2.0: 1m ≈ +3 to +6%, 3m ≈ +5 to +10%, 6m ≈ +8 to +15%, 1y ≈ +10 to +20%\n"
+            "- zscore_20d = -2.0: 1m ≈ +3 to +6%\n"
             "- Scale proportionally with abs(zscore_20d).\n"
             "- If roc_5d is already positive (stabilisation confirmed), increase 1m estimate by ~1–2%."
         ),
@@ -548,10 +561,8 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "knowledge, adjusted upward if pct_from_high shows the stock is near its low (cheap entry). "
             "Rank by Value Score descending.\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- FCF yield ≈ 6%, earnings yield ≈ 8%: 1m ≈ +1 to +3%, 3m ≈ +3 to +6%, "
-            "6m ≈ +4 to +8%, 1y ≈ +5 to +10%\n"
-            "- Add ~2–3% to 1y estimate for each additional point of FCF yield above 5%.\n"
-            "- Long-horizon (3y) fair-value reversion adds ~15–25% beyond 1y estimate."
+            "- FCF yield ≈ 6%, earnings yield ≈ 8%: 1m ≈ +1 to +3%\n"
+            "- Add ~0.5% to 1m estimate for each additional point of FCF yield above 5%."
         ),
     },
     # -----------------------------------------------------------------------
@@ -582,8 +593,8 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "Multiply the result by (100 / volatility_30d_ann) to favour price stability. "
             "Rank by adjusted Quality Score descending.\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- ROE = 20%, ROIC = 12%: 1m ≈ +1 to +3%, 3m ≈ +3 to +7%, 6m ≈ +5 to +10%, 1y ≈ +8 to +15%\n"
-            "- Scale with quality score; higher ROE/ROIC justifies higher long-horizon estimates.\n"
+            "- ROE = 20%, ROIC = 12%: 1m ≈ +1 to +3%\n"
+            "- Scale with quality score; higher ROE/ROIC justifies higher estimates.\n"
             "- Low volatility stocks rarely deliver >3% in any single month — keep 1m estimates modest."
         ),
     },
@@ -610,9 +621,8 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "Risk-Adjusted Score = sharpe_proxy (roc_30d / volatility_30d_ann), descending. "
             "Break ties by lowest volatility_30d_ann — prioritise the calmest stocks.\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- roc_30d = +6%, volatility = 15%: 1m ≈ +1 to +2%, 3m ≈ +2 to +4%, "
-            "6m ≈ +3 to +6%, 1y ≈ +5 to +10%\n"
-            "- Cap 1m estimates at +3% and 1y at +12% — defensive stocks are steady, not explosive.\n"
+            "- roc_30d = +6%, volatility = 15%: 1m ≈ +1 to +2%\n"
+            "- Cap 1m estimates at +3% — defensive stocks are steady, not explosive.\n"
             "- Scale up if sharpe_proxy > 0.5 (unusually strong risk-adjusted performance)."
         ),
     },
@@ -642,9 +652,8 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "weighted by price momentum (roc_30d). Rank by Growth Score descending. "
             "Break ties by highest roc_10d (most recent momentum).\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- Revenue growth = 15%, EPS growth = 20%: 1m ≈ +3 to +6%, 3m ≈ +6 to +12%, "
-            "6m ≈ +8 to +15%, 1y ≈ +10 to +20%\n"
-            "- Scale with growth rate: each additional 5% in revenue growth ≈ +2% to 1y estimate.\n"
+            "- Revenue growth = 15%, EPS growth = 20%: 1m ≈ +3 to +6%\n"
+            "- Scale with growth rate: each additional 5% in revenue growth ≈ +0.5% to 1m estimate.\n"
             "- If pct_from_high ≈ 0 (at new high), add +1–2% to 1m estimate for breakout premium."
         ),
     },
@@ -676,10 +685,8 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "Multiply by roc_30d to confirm the growth narrative with price momentum. "
             "Rank by adjusted Size Score descending.\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- Market cap ≈ $1B, moderate growth: 1m ≈ +2 to +5%, 3m ≈ +4 to +9%, "
-            "6m ≈ +6 to +13%, 1y ≈ +8 to +20%\n"
-            "- Smaller cap → higher long-horizon estimate; larger cap within the range → "
-            "lower estimate.\n"
+            "- Market cap ≈ $1B, moderate growth: 1m ≈ +2 to +5%\n"
+            "- Smaller cap → higher estimate; larger cap within the range → lower estimate.\n"
             "- Higher roc_30d justifies a higher 1m estimate (momentum confirming the thesis)."
         ),
     },
@@ -712,10 +719,9 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "Rank by Income Score descending. Break ties by highest dividend growth rate.\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
             "Include the dividend yield in your total return estimates.\n"
-            "- Yield = 4%, dividend growth = 3%: 1m ≈ +0.5 to +1.5%, 3m ≈ +1.5 to +3%, "
-            "6m ≈ +3 to +5%, 1y ≈ +5 to +8%\n"
-            "- 1y total return = capital appreciation + full-year dividend yield.\n"
-            "- For every 1% of yield above 3%, add ~0.8% to your 1y estimate."
+            "- Yield = 4%, dividend growth = 3%: 1m ≈ +0.5 to +1.5%\n"
+            "- 1m total return = capital appreciation + monthly dividend yield (≈ annual yield / 12).\n"
+            "- For every 1% of yield above 3%, add ~0.1% to your 1m estimate."
         ),
     },
     # -----------------------------------------------------------------------
@@ -743,8 +749,7 @@ CHILD_AGENTS: list[dict[str, str]] = [
             "Prefer stocks where roc_5d > roc_10d / 2 (deceleration of decline confirms stabilisation). "
             "Apply your knowledge of each company's fundamentals to confirm the business is intact.\n\n"
             "EXPECTED RETURN ESTIMATION RULE:\n"
-            "- zscore_20d = -1.5, roc_30d = -12%: 1m ≈ +4 to +7%, 3m ≈ +8 to +12%, "
-            "6m ≈ +10 to +18%, 1y ≈ +12 to +25%\n"
+            "- zscore_20d = -1.5, roc_30d = -12%: 1m ≈ +4 to +7%\n"
             "- Scale proportionally: each additional unit of abs(zscore_20d) ≈ +2–3% to 1m estimate.\n"
             "- If roc_5d is already positive (bounce has started), add +1–2% to 1m estimate."
         ),

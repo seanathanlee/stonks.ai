@@ -19,13 +19,13 @@ Each model function has the signature::
 
     model_fn(symbol: str, prices: list[float]) -> dict[str, float]
 
-where the returned dict maps horizon labels ("1m", "3m", "6m", "1y") to
-expected percentage returns.
+where the returned dict maps the horizon label ("1m") to the expected
+percentage return.
 
 The shared runner ``run_stat_agent`` applies a model function to every symbol
-in the price dataset, ranks symbols by their composite signal (mean expected
-return across all horizons), and returns the top 5 picks in the standard ADX
-forecast schema used by all child agents.
+in the price dataset, ranks symbols by their 1-month expected return, and
+returns the top 5 picks in the standard ADX forecast schema used by all child
+agents.
 
 For agents that need cross-sectional context (CAPM, HMM) a *factory* pattern
 is used: ``model_fn_factory(price_map) -> model_fn``.  Simple agents return
@@ -41,6 +41,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+from agents.horizons import FORECAST_HORIZONS as HORIZONS, HORIZON_RETURN_KEYS
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -55,14 +57,6 @@ MONTE_CARLO_SIMS = 1_000
 
 # Maximum EM iterations for the HMM fitting step.
 HMM_ITERATIONS = 200
-
-# Horizon labels → approximate number of trading days.
-HORIZONS: dict[str, int] = {
-    "1m": 21,
-    "3m": 63,
-    "6m": 126,
-    "1y": 252,
-}
 
 # Type aliases
 ModelFn = Callable[[str, list[float]], dict[str, float]]
@@ -98,7 +92,7 @@ def run_stat_agent(
     Returns
     -------
     List of ≤5 pick dicts compatible with the ADX forecast schema:
-        symbol, rank, expected_return_1m/3m/6m/1y, reasoning.
+        symbol, rank, expected_return_1m, reasoning.
     """
     # Build a {symbol: [price, ...]} map for the factory.
     price_map: dict[str, list[float]] = {
@@ -140,19 +134,16 @@ def run_stat_agent(
     picks: list[dict[str, Any]] = []
     for rank, (symbol, returns) in enumerate(ranked, start=1):
         horizon_summary = ", ".join(
-            f"{h}={returns.get(h, 0.0):.2f}%" for h in ("1m", "3m", "6m", "1y")
+            f"{h}={returns.get(h, 0.0):.2f}%" for h in HORIZONS
         )
-        picks.append(
-            {
-                "rank": rank,
-                "symbol": symbol,
-                "expected_return_1m": float(returns.get("1m", 0.0)),
-                "expected_return_3m": float(returns.get("3m", 0.0)),
-                "expected_return_6m": float(returns.get("6m", 0.0)),
-                "expected_return_1y": float(returns.get("1y", 0.0)),
-                "reasoning": f"{name}: {horizon_summary}",
-            }
-        )
+        pick: dict[str, Any] = {
+            "rank": rank,
+            "symbol": symbol,
+            "reasoning": f"{name}: {horizon_summary}",
+        }
+        for h, key in HORIZON_RETURN_KEYS.items():
+            pick[key] = float(returns.get(h, 0.0))
+        picks.append(pick)
     return picks
 
 

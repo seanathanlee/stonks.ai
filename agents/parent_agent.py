@@ -5,7 +5,7 @@ Coordinates all 9 child agents and persists results to Azure Data Explorer.
 Workflow:
   1. Pull the last 30 days of NASDAQ price data from the ADX `dailyStockPrice` table.
   2. Fan out to all 9 child agents concurrently (ThreadPoolExecutor).
-  3. Collect each agent's 5 ranked picks across 4 horizons.
+  3. Collect each agent's 5 ranked picks for the 1-month horizon.
   4. Write every forecast row into the ADX `agentStockForecast` table.
   5. Print a consolidated summary report.
 
@@ -23,19 +23,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from typing import Any
 
-from agents.adx_client import get_all_symbols, get_price_history, ingest_forecasts, now_utc_iso
-from agents.child_agents import CHILD_AGENTS, run_child_agent
+from agents.adx_client import get_all_price_history, ingest_forecasts, now_utc_iso
+from agents.child_agents import CHILD_AGENTS, compute_all_signals, run_child_agent
+from agents.horizons import HORIZON_RETURN_KEYS as HORIZON_KEYS
 from agents.stat_agents import STAT_AGENTS, run_stat_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
-
-HORIZON_KEYS = {
-    "1m": "expected_return_1m",
-    "3m": "expected_return_3m",
-    "6m": "expected_return_6m",
-    "1y": "expected_return_1y",
-}
 PRICE_HISTORY_DAYS = 30
 # Statistical agents are CPU-bound and don't hit any external rate limits, so
 # they can all run in parallel.
@@ -95,7 +89,7 @@ def _print_summary(
     print(f"Stonks.ai Multi-Agent Forecast  |  {report_time}")
     print("=" * 70)
 
-    for horizon in ["1m", "3m", "6m", "1y"]:
+    for horizon in ["1m"]:
         horizon_rows = [r for r in all_forecasts if r["horizon"] == horizon]
         # Aggregate: sum expected returns across agents for each symbol
         symbol_returns: dict[str, list[float]] = {}
@@ -166,6 +160,11 @@ def run_parent_agent(as_of_date: date | None = None) -> list[dict[str, Any]]:
     # ------------------------------------------------------------------
     all_forecast_rows: list[dict[str, Any]] = []
 
+    # Pre-compute signals once; each LLM child agent receives the same
+    # pre-built list rather than recomputing it independently.
+    log.info("Pre-computing quantitative signals for %d symbols…", len(symbols))
+    precomputed_signals = compute_all_signals(stock_data)
+
     total_agents = len(CHILD_AGENTS) + len(STAT_AGENTS)
     log.info(
         "Running %d agents concurrently (%d LLM @ max %d, %d statistical @ max %d)…",
@@ -192,6 +191,7 @@ def run_parent_agent(as_of_date: date | None = None) -> list[dict[str, Any]]:
                     agent["name"],
                     agent["strategy"],
                     stock_data,
+                    precomputed_signals=precomputed_signals,
                 )
             ] = agent["name"]
 
@@ -241,7 +241,7 @@ def _fetch_all_price_history(
     days: int, as_of_date: str | None = None
 ) -> dict[str, list[dict[str, Any]]]:
     """
-    Fetch price history for all symbols present in ADX for the given window.
+    Fetch price history for all symbols in a single ADX query.
 
     Args:
         days: Number of days to look back.
@@ -250,10 +250,7 @@ def _fetch_all_price_history(
     """
     if days < 1:
         raise ValueError(f"days must be a positive integer, got {days!r}")
-    symbols = get_all_symbols(days=days, as_of_date=as_of_date)
-    if not symbols:
-        return {}
-    return get_price_history(symbols, days=days, as_of_date=as_of_date)
+    return get_all_price_history(days=days, as_of_date=as_of_date)
 
 
 # ---------------------------------------------------------------------------
