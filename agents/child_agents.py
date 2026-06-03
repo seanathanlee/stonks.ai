@@ -19,6 +19,7 @@ parses the structured JSON result.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -30,6 +31,25 @@ from typing import Any
 from openai import APIStatusError, AzureOpenAI, RateLimitError
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# In-process LLM result cache
+# ---------------------------------------------------------------------------
+# Maps (agent_name, signals_sha256) → list[pick dicts].
+# Within a single process run (e.g. a multi-date backfill loop calling
+# run_parent_agent() repeatedly) this avoids re-calling the LLM when the
+# same agent receives identical input signals for the same date.  The cache
+# is intentionally in-process only — no disk persistence — so it resets
+# between job runs and never serves stale results across different days.
+
+_llm_cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
+
+
+def _signals_hash(signals: list[dict[str, Any]]) -> str:
+    """Return a stable SHA-256 hex digest of a serialised signals list."""
+    payload = json.dumps(signals, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(payload).hexdigest()
+
 
 # ---------------------------------------------------------------------------
 # Azure OpenAI client
@@ -51,7 +71,7 @@ def _get_client() -> AzureOpenAI:
 
 
 def _get_deployment() -> str:
-    return os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+    return os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
 
 
 # ---------------------------------------------------------------------------
@@ -363,6 +383,12 @@ def run_child_agent(
         if history:
             signals.append(_compute_signals(symbol, history))
 
+    # Check the in-process cache before hitting the LLM.
+    cache_key = (name, _signals_hash(signals))
+    if cache_key in _llm_cache:
+        log.info("Cache hit for agent '%s' — skipping LLM call.", name)
+        return _llm_cache[cache_key]
+
     signals_text = json.dumps(signals, separators=(",", ":"))
 
     messages = [
@@ -425,6 +451,7 @@ def run_child_agent(
             }
         )
 
+    _llm_cache[cache_key] = picks
     return picks
 
 
