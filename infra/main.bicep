@@ -63,21 +63,21 @@ resource cognitiveServices 'Microsoft.CognitiveServices/accounts@2023-05-01' = {
 }
 
 // ============================================================
-// Azure OpenAI model deployment: gpt-4o
+// Azure OpenAI model deployment: gpt-4.1
 // ============================================================
 
-resource gpt4oDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = {
-  name: 'gpt-4o'
+resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = {
+  name: 'gpt-4.1'
   parent: cognitiveServices
   sku: {
     name: 'Standard'
-    capacity: 10
+    capacity: 60
   }
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-4o'
-      version: '2024-11-20'
+      name: 'gpt-4.1'
+      version: '2025-04-14'
     }
   }
 }
@@ -375,8 +375,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           env: concat(
             [
               { name: 'AZURE_OPENAI_ENDPOINT', value: cognitiveServices.properties.endpoint }
-              { name: 'AZURE_OPENAI_DEPLOYMENT', value: 'gpt-4o' }
-              { name: 'AZURE_OPENAI_API_VERSION', value: '2024-02-01' }
+              { name: 'AZURE_OPENAI_DEPLOYMENT', value: 'gpt-4.1' }
+              { name: 'AZURE_OPENAI_API_VERSION', value: '2025-01-01-preview' }
               { name: 'ADX_CLUSTER_URI', value: adxCluster.properties.uri }
               { name: 'ADX_DATABASE', value: 'stonksai' }
               {

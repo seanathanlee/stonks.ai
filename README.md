@@ -258,7 +258,7 @@ And optionally add these **repository variables**:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BASE_NAME` | `stonksai` | Prefix for all Azure resource names |
-| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4o` | Azure OpenAI model deployment name |
+| `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` | Azure OpenAI model deployment name |
 | `SWA_LOCATION` | `centralus` | Azure region for the Static Web App |
 
 ### 3 — Seed historical data (one-time)
