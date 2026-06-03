@@ -37,7 +37,7 @@ def _get_client() -> AzureOpenAI:
 
 
 def _get_deployment() -> str:
-    return os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4.1")
+    return os.environ.get("AZURE_OPENAI_CHAT_DEPLOYMENT") or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
 
 
 # ---------------------------------------------------------------------------
