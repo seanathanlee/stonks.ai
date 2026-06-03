@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from typing import Any
@@ -36,7 +37,13 @@ HORIZON_KEYS = {
     "1y": "expected_return_1y",
 }
 PRICE_HISTORY_DAYS = 30
-MAX_WORKERS = 17  # 9 LLM child agents + 8 statistical agents
+# Statistical agents are CPU-bound and don't hit any external rate limits, so
+# they can all run in parallel.
+STAT_MAX_WORKERS = int(os.environ.get("STAT_AGENT_MAX_WORKERS", "8"))
+# LLM child agents share an Azure OpenAI deployment with finite TPM/RPM. Cap
+# concurrency to avoid 429 "Too Many Requests" responses that cause agents to
+# silently drop out of the run.
+LLM_MAX_WORKERS = int(os.environ.get("LLM_AGENT_MAX_WORKERS", "3"))
 
 
 # ---------------------------------------------------------------------------
@@ -158,18 +165,26 @@ def run_parent_agent(as_of_date: date | None = None) -> list[dict[str, Any]]:
 
     total_agents = len(CHILD_AGENTS) + len(STAT_AGENTS)
     log.info(
-        "Running %d agents concurrently (%d LLM, %d statistical)…",
+        "Running %d agents concurrently (%d LLM @ max %d, %d statistical @ max %d)…",
         total_agents,
         len(CHILD_AGENTS),
+        LLM_MAX_WORKERS,
         len(STAT_AGENTS),
+        STAT_MAX_WORKERS,
     )
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    llm_executor = ThreadPoolExecutor(
+        max_workers=LLM_MAX_WORKERS, thread_name_prefix="llm-agent"
+    )
+    stat_executor = ThreadPoolExecutor(
+        max_workers=STAT_MAX_WORKERS, thread_name_prefix="stat-agent"
+    )
+    try:
         futures: dict[Any, str] = {}
 
-        # LLM-based child agents
+        # LLM-based child agents (throttled to respect Azure OpenAI quota).
         for agent in CHILD_AGENTS:
             futures[
-                executor.submit(
+                llm_executor.submit(
                     run_child_agent,
                     agent["name"],
                     agent["strategy"],
@@ -177,10 +192,10 @@ def run_parent_agent(as_of_date: date | None = None) -> list[dict[str, Any]]:
                 )
             ] = agent["name"]
 
-        # Pure-statistical agents
+        # Pure-statistical agents.
         for agent in STAT_AGENTS:
             futures[
-                executor.submit(
+                stat_executor.submit(
                     run_stat_agent,
                     agent.name,
                     agent.model_fn_factory,
@@ -197,6 +212,9 @@ def run_parent_agent(as_of_date: date | None = None) -> list[dict[str, Any]]:
                 all_forecast_rows.extend(rows)
             except Exception as exc:
                 log.error("Agent '%s' failed: %s", agent_name, exc)
+    finally:
+        llm_executor.shutdown(wait=True)
+        stat_executor.shutdown(wait=True)
 
     # ------------------------------------------------------------------
     # 3. Persist forecasts to ADX
