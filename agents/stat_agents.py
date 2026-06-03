@@ -41,6 +41,8 @@ from typing import Any, Callable
 
 import numpy as np
 
+from agents.horizons import FORECAST_HORIZONS as HORIZONS, HORIZON_RETURN_KEYS
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -55,11 +57,6 @@ MONTE_CARLO_SIMS = 1_000
 
 # Maximum EM iterations for the HMM fitting step.
 HMM_ITERATIONS = 200
-
-# Horizon labels → approximate number of trading days.
-HORIZONS: dict[str, int] = {
-    "1m": 21,
-}
 
 # Type aliases
 ModelFn = Callable[[str, list[float]], dict[str, float]]
@@ -136,15 +133,17 @@ def run_stat_agent(
 
     picks: list[dict[str, Any]] = []
     for rank, (symbol, returns) in enumerate(ranked, start=1):
-        horizon_summary = f"1m={returns.get('1m', 0.0):.2f}%"
-        picks.append(
-            {
-                "rank": rank,
-                "symbol": symbol,
-                "expected_return_1m": float(returns.get("1m", 0.0)),
-                "reasoning": f"{name}: {horizon_summary}",
-            }
+        horizon_summary = " ".join(
+            f"{h}={returns.get(h, 0.0):.2f}%" for h in HORIZONS
         )
+        pick: dict[str, Any] = {
+            "rank": rank,
+            "symbol": symbol,
+            "reasoning": f"{name}: {horizon_summary}",
+        }
+        for h, key in HORIZON_RETURN_KEYS.items():
+            pick[key] = float(returns.get(h, 0.0))
+        picks.append(pick)
     return picks
 
 

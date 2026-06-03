@@ -45,17 +45,15 @@ from agents.adx_client import (
     ingest_evaluations,
     now_utc_iso,
 )
+from agents.horizons import ALL_HORIZONS
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 # Mapping of forecast horizon label → calendar-day lookback window.
-HORIZON_LOOKBACK_DAYS: dict[str, int] = {
-    "1m": 30,
-    "3m": 91,
-    "6m": 182,
-    "1y": 365,
-}
+# Imported from agents.horizons so that adding a new horizon only requires
+# a change in one place.
+HORIZON_LOOKBACK_DAYS: dict[str, int] = ALL_HORIZONS
 
 # Default horizon evaluated when none is specified.
 DEFAULT_HORIZON = "1m"

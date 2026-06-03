@@ -14,6 +14,8 @@ from typing import Any
 
 from openai import AzureOpenAI
 
+from agents.horizons import ALL_HORIZONS
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -104,7 +106,7 @@ TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "horizon": {
                         "type": "string",
-                        "enum": ["1m", "3m", "6m", "1y"],
+                        "enum": list(ALL_HORIZONS),
                         "description": "Investment horizon to filter by (default: 1m).",
                     },
                     "top_n": {
@@ -155,7 +157,7 @@ TOOLS: list[dict[str, Any]] = [
                     },
                     "horizon": {
                         "type": "string",
-                        "enum": ["1m", "3m", "6m", "1y"],
+                        "enum": list(ALL_HORIZONS),
                         "description": "Optional: filter to a single horizon.",
                     },
                 },
@@ -179,7 +181,7 @@ TOOLS: list[dict[str, Any]] = [
                 "properties": {
                     "horizon": {
                         "type": "string",
-                        "enum": ["1m", "3m", "6m", "1y"],
+                        "enum": list(ALL_HORIZONS),
                         "description": "Forecast horizon to evaluate (default: 1m).",
                     },
                     "days": {
@@ -327,7 +329,7 @@ def _build_evaluation_chart(
                 "label": "Avg Prediction Error",
                 "data": errors,
                 "backgroundColor": [
-                    _CHART_COLORS[i % len(_CHART_COLORS)] for i in range(len(scores))
+                    _CHART_COLORS[i % len(_CHART_COLORS)] for i in range(len(errors))
                 ],
                 "borderRadius": 4,
             }

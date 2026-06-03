@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -78,18 +79,20 @@ async def root() -> FileResponse:
 # ---------------------------------------------------------------------------
 
 _sessions: dict[str, list[dict[str, Any]]] = {}
+_sessions_lock = threading.Lock()
 
 _MAX_SESSIONS = 500  # evict oldest when limit reached
 
 
 def _get_or_create_session(session_id: str) -> list[dict[str, Any]]:
-    if session_id not in _sessions:
-        if len(_sessions) >= _MAX_SESSIONS:
-            # Evict the oldest entry
-            oldest = next(iter(_sessions))
-            del _sessions[oldest]
-        _sessions[session_id] = []
-    return _sessions[session_id]
+    with _sessions_lock:
+        if session_id not in _sessions:
+            if len(_sessions) >= _MAX_SESSIONS:
+                # Evict the oldest entry
+                oldest = next(iter(_sessions))
+                del _sessions[oldest]
+            _sessions[session_id] = []
+        return _sessions[session_id]
 
 
 # ---------------------------------------------------------------------------

@@ -26,6 +26,8 @@ from typing import Any
 
 from openai import APIStatusError, AzureOpenAI, RateLimitError
 
+from agents.horizons import FORECAST_HORIZONS, HORIZON_RETURN_KEYS
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -294,57 +296,83 @@ def _compute_signals(symbol: str, history: list[dict[str, Any]]) -> dict[str, An
 # Shared agent runner
 # ---------------------------------------------------------------------------
 
-_RESPONSE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "picks": {
-            "type": "array",
-            "description": "Exactly 5 stock picks, ranked 1 (best) to 5.",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "rank": {"type": "integer"},
-                    "symbol": {"type": "string"},
-                    "expected_return_1m": {
-                        "type": "number",
-                        "description": "Expected % return over 1 month.",
-                    },
-                    "reasoning": {
-                        "type": "string",
-                        "description": "Brief rationale for this pick.",
-                    },
-                },
-                "required": [
-                    "rank",
-                    "symbol",
-                    "expected_return_1m",
-                    "reasoning",
-                ],
-            },
-            "minItems": 5,
-            "maxItems": 5,
-        }
-    },
-    "required": ["picks"],
-}
 
+def _build_response_schema() -> dict[str, Any]:
+    """Build the submit_picks JSON schema dynamically from FORECAST_HORIZONS."""
+    horizon_properties = {
+        HORIZON_RETURN_KEYS[h]: {
+            "type": "number",
+            "description": f"Expected % return over {h}.",
+        }
+        for h in FORECAST_HORIZONS
+    }
+    required_return_keys = list(HORIZON_RETURN_KEYS.values())
+    return {
+        "type": "object",
+        "properties": {
+            "picks": {
+                "type": "array",
+                "description": "Exactly 5 stock picks, ranked 1 (best) to 5.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "rank": {"type": "integer"},
+                        "symbol": {"type": "string"},
+                        **horizon_properties,
+                        "reasoning": {
+                            "type": "string",
+                            "description": "Brief rationale for this pick.",
+                        },
+                    },
+                    "required": ["rank", "symbol"] + required_return_keys + ["reasoning"],
+                },
+                "minItems": 5,
+                "maxItems": 5,
+            }
+        },
+        "required": ["picks"],
+    }
+
+
+_RESPONSE_SCHEMA = _build_response_schema()
+
+_horizons_str = ", ".join(FORECAST_HORIZONS)
 _SUBMIT_TOOL = {
     "type": "function",
     "function": {
         "name": "submit_picks",
         "description": (
-            "Submit exactly 5 ranked stock picks with expected returns for "
-            "the 1-month horizon."
+            f"Submit exactly 5 ranked stock picks with expected returns for "
+            f"the {_horizons_str} horizon(s)."
         ),
         "parameters": _RESPONSE_SCHEMA,
     },
 }
 
 
+def compute_all_signals(
+    stock_data: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """
+    Pre-compute quantitative signals for all symbols in *stock_data*.
+
+    Calling this once and passing the result to ``run_child_agent`` via the
+    ``precomputed_signals`` keyword argument avoids redundant signal
+    computation when multiple child agents share the same price data.
+    """
+    return [
+        _compute_signals(symbol, history)
+        for symbol, history in stock_data.items()
+        if history
+    ]
+
+
 def run_child_agent(
     name: str,
     strategy_prompt: str,
     stock_data: dict[str, list[dict[str, Any]]],
+    *,
+    precomputed_signals: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Run a single child agent and return its 5 picks.
@@ -355,18 +383,22 @@ def run_child_agent(
     strategy_prompt: System prompt describing the investment philosophy,
                      selection criteria, ranking logic, and return estimates.
     stock_data:      {symbol: [{"date": str, "price": float}, ...]} for all symbols.
+    precomputed_signals:
+                     Optional pre-computed signals list (from ``compute_all_signals``).
+                     When provided the per-symbol signal computation is skipped,
+                     which avoids redundant work when several child agents share
+                     the same price dataset.
 
     Returns
     -------
     List of pick dicts, each containing:
-        symbol, rank, expected_return_1m, reasoning
+        symbol, rank, expected_return_<horizon>, reasoning
     """
-    # Pre-compute quantitative signals for every symbol so the LLM reasons
-    # over structured metrics rather than raw price lists.
-    signals: list[dict[str, Any]] = []
-    for symbol, history in stock_data.items():
-        if history:
-            signals.append(_compute_signals(symbol, history))
+    # Use pre-computed signals when available; otherwise compute them now.
+    if precomputed_signals is not None:
+        signals = precomputed_signals
+    else:
+        signals = compute_all_signals(stock_data)
 
     # Check the in-process cache before hitting the LLM.
     cache_key = (name, _signals_hash(signals))
