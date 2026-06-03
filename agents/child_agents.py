@@ -107,11 +107,17 @@ def _chat_completion_with_retry(client: AzureOpenAI, **kwargs: Any) -> Any:
         if attempt >= _RATE_LIMIT_MAX_ATTEMPTS:
             break
 
+        backoff = min(_RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)), _RATE_LIMIT_MAX_DELAY)
         hint = _retry_after_seconds(last_err) if last_err else None
         if hint is not None:
-            delay = min(hint, _RATE_LIMIT_MAX_DELAY)
+            # Honour the server hint, but never below our exponential backoff
+            # floor — Azure occasionally returns Retry-After: 0 on sustained
+            # 429s, which would otherwise collapse our retries into a tight
+            # loop and exhaust the budget without giving the quota time to
+            # recover.
+            delay = min(max(hint, backoff), _RATE_LIMIT_MAX_DELAY)
         else:
-            delay = min(_RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)), _RATE_LIMIT_MAX_DELAY)
+            delay = backoff
         # Add a small jitter so concurrent agents don't retry in lock-step.
         delay = delay + random.uniform(0, min(1.0, delay * 0.1))
         log.warning(
