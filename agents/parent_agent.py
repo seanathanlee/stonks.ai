@@ -41,11 +41,12 @@ PRICE_HISTORY_DAYS = 30
 # they can all run in parallel.
 STAT_MAX_WORKERS = int(os.environ.get("STAT_AGENT_MAX_WORKERS", "8"))
 # LLM child agents share an Azure OpenAI deployment with finite TPM/RPM.
-# With gpt-4.1 at 60 K TPM each run consumes ~18 K tokens across 9 agents,
-# so 3 concurrent workers keeps peak demand well within quota while cutting
-# wall-clock time by ~3×.  Operators with higher-tier deployments can raise
-# this further via the env var.
-LLM_MAX_WORKERS = int(os.environ.get("LLM_AGENT_MAX_WORKERS", "3"))
+# Running agents sequentially (1 worker) is the safest default because each
+# agent sends the full signals payload (~5–10 K tokens) and Azure OpenAI
+# enforces a rolling 60-second window.  Concurrent workers exhaust the quota
+# across batches, causing 429s that no amount of short-interval retrying can
+# resolve.  Operators with higher-tier deployments can raise this via the env var.
+LLM_MAX_WORKERS = int(os.environ.get("LLM_AGENT_MAX_WORKERS", "1"))
 
 
 # ---------------------------------------------------------------------------
