@@ -251,10 +251,7 @@ def get_all_price_history(
     if as_of_date is not None:
         _validate_iso_date(as_of_date, "as_of_date")
         end = _as_of_datetime(as_of_date)
-        where_clause = (
-            f"priceDate >= {end} - {int(days)}d"
-            f" and priceDate <= {end}"
-        )
+        where_clause = f"priceDate >= {end} - {int(days)}d and priceDate <= {end}"
     else:
         where_clause = f"priceDate >= ago({int(days)}d)"
 

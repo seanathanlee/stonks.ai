@@ -133,7 +133,7 @@ def run_stat_agent(
 
     picks: list[dict[str, Any]] = []
     for rank, (symbol, returns) in enumerate(ranked, start=1):
-        horizon_summary = " ".join(
+        horizon_summary = ", ".join(
             f"{h}={returns.get(h, 0.0):.2f}%" for h in HORIZONS
         )
         pick: dict[str, Any] = {
