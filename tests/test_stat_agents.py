@@ -97,15 +97,13 @@ def _assert_pick_schema(pick: dict) -> None:
     """Assert that a pick dict has the required keys and valid types."""
     required = {
         "rank", "symbol",
-        "expected_return_1m", "expected_return_3m",
-        "expected_return_6m", "expected_return_1y",
+        "expected_return_1m",
         "reasoning",
     }
     assert required.issubset(pick.keys()), f"Missing keys: {required - pick.keys()}"
     assert isinstance(pick["rank"], int)
     assert isinstance(pick["symbol"], str)
-    for key in ("expected_return_1m", "expected_return_3m",
-                "expected_return_6m", "expected_return_1y"):
+    for key in ("expected_return_1m",):
         assert isinstance(pick[key], float), f"{key} is not float"
         assert math.isfinite(pick[key]), f"{key} is not finite"
 
@@ -122,10 +120,11 @@ class TestMomentumFactor:
         for h, v in result.items():
             assert v > 0, f"Expected positive return for {h}, got {v}"
 
-    def test_horizons_scale_with_time(self, trending_prices):
+    def test_horizons_present(self, trending_prices):
         result = _momentum_factor_model("TEST", trending_prices)
-        # Longer horizon should produce larger absolute expected return.
-        assert abs(result["1y"]) > abs(result["1m"])
+        # Only 1m horizon is produced.
+        assert "1m" in result
+        assert math.isfinite(result["1m"])
 
     def test_insufficient_data_raises(self):
         with pytest.raises((ValueError, IndexError)):
@@ -169,7 +168,7 @@ class TestETS:
         factory = _ets_factory(price_map)
         result = factory("TEST", flat_prices)
         _assert_horizon_dict(result, allow_zero=True)
-        # Flat prices → near-zero returns for all horizons.
+        # Flat prices → near-zero returns.
         for h, v in result.items():
             assert abs(v) < 5.0, f"Unexpectedly large return for flat series: {h}={v}"
 
@@ -237,8 +236,9 @@ class TestMonteCarlo:
     def test_longer_horizon_larger_absolute_return(self, trending_prices, price_map):
         factory = _monte_carlo_factory(price_map)
         result = factory("TEST", trending_prices)
-        # With a positive drift, longer simulations should accumulate more return.
-        assert abs(result["1y"]) > abs(result["1m"])
+        # Only 1m horizon is produced; check it is a finite float.
+        assert "1m" in result
+        assert math.isfinite(result["1m"])
 
     def test_zero_volatility_raises(self, price_map):
         factory = _monte_carlo_factory(price_map)
