@@ -23,9 +23,11 @@ import json
 import logging
 import math
 import os
+import random
+import time
 from typing import Any
 
-from openai import AzureOpenAI
+from openai import APIStatusError, AzureOpenAI, RateLimitError
 
 log = logging.getLogger(__name__)
 
@@ -43,12 +45,85 @@ def _get_client() -> AzureOpenAI:
             azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
             api_key=os.environ["AZURE_OPENAI_API_KEY"],
             api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
+            max_retries=int(os.environ.get("AZURE_OPENAI_MAX_RETRIES", "5")),
         )
     return _client
 
 
 def _get_deployment() -> str:
     return os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit handling
+# ---------------------------------------------------------------------------
+
+# Maximum number of times we will retry a chat.completions call after the
+# OpenAI SDK's own retry budget has been exhausted (i.e. for stubborn 429s).
+_RATE_LIMIT_MAX_ATTEMPTS = int(os.environ.get("AZURE_OPENAI_RATE_LIMIT_RETRIES", "6"))
+# Initial backoff in seconds; doubles each attempt up to _RATE_LIMIT_MAX_DELAY.
+_RATE_LIMIT_BASE_DELAY = float(os.environ.get("AZURE_OPENAI_RATE_LIMIT_BASE_DELAY", "2.0"))
+_RATE_LIMIT_MAX_DELAY = float(os.environ.get("AZURE_OPENAI_RATE_LIMIT_MAX_DELAY", "60.0"))
+
+
+def _retry_after_seconds(err: Exception) -> float | None:
+    """Extract the Retry-After hint (seconds) from an OpenAI error, if any."""
+    response = getattr(err, "response", None)
+    if response is None:
+        return None
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    for key in ("retry-after-ms", "Retry-After-Ms"):
+        value = headers.get(key)
+        if value:
+            try:
+                return float(value) / 1000.0
+            except (TypeError, ValueError):
+                pass
+    for key in ("retry-after", "Retry-After"):
+        value = headers.get(key)
+        if value:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    return None
+
+
+def _chat_completion_with_retry(client: AzureOpenAI, **kwargs: Any) -> Any:
+    """Call client.chat.completions.create with backoff on 429/Rate-limit errors."""
+    last_err: Exception | None = None
+    for attempt in range(1, _RATE_LIMIT_MAX_ATTEMPTS + 1):
+        try:
+            return client.chat.completions.create(**kwargs)
+        except RateLimitError as err:
+            last_err = err
+        except APIStatusError as err:
+            if getattr(err, "status_code", None) != 429:
+                raise
+            last_err = err
+
+        if attempt >= _RATE_LIMIT_MAX_ATTEMPTS:
+            break
+
+        hint = _retry_after_seconds(last_err) if last_err else None
+        if hint is not None:
+            delay = min(hint, _RATE_LIMIT_MAX_DELAY)
+        else:
+            delay = min(_RATE_LIMIT_BASE_DELAY * (2 ** (attempt - 1)), _RATE_LIMIT_MAX_DELAY)
+        # Add a small jitter so concurrent agents don't retry in lock-step.
+        delay = delay + random.uniform(0, min(1.0, delay * 0.1))
+        log.warning(
+            "Rate limited by Azure OpenAI (attempt %d/%d); retrying in %.2fs",
+            attempt,
+            _RATE_LIMIT_MAX_ATTEMPTS,
+            delay,
+        )
+        time.sleep(delay)
+
+    assert last_err is not None  # for type-checkers
+    raise last_err
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +384,8 @@ def run_child_agent(
     picks: list[dict[str, Any]] = []
 
     while True:
-        response = client.chat.completions.create(
+        response = _chat_completion_with_retry(
+            client,
             model=_get_deployment(),
             messages=messages,
             tools=[_SUBMIT_TOOL],
