@@ -8,6 +8,7 @@
 // ============================================================
 
 @description('Base name used to derive all resource names.')
+@minLength(2)
 param baseName string = 'stonksai'
 
 @description('Azure region for all resources.')
@@ -71,7 +72,7 @@ resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2023-
   parent: cognitiveServices
   sku: {
     name: 'Standard'
-    capacity: 60
+    capacity: 50
   }
   properties: {
     model: {
