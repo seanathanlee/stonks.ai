@@ -84,8 +84,8 @@ _RATE_LIMIT_MAX_ATTEMPTS = int(os.environ.get("AZURE_OPENAI_RATE_LIMIT_RETRIES",
 # Initial backoff in seconds; doubles each attempt up to _RATE_LIMIT_MAX_DELAY.
 # Azure OpenAI enforces a rolling 60-second quota window, so the first retry
 # must wait long enough for that window to meaningfully recover.  15 seconds
-# gives backoffs of 15 s, 30 s, 60 s, 60 s, 60 s — well-aligned with the
-# Azure rate-limit recovery cycle.
+# gives backoffs of 15 s, 30 s, 60 s, 60 s, 60 s, 60 s (for the default 6
+# attempts) — well-aligned with the Azure rate-limit recovery cycle.
 _RATE_LIMIT_BASE_DELAY = float(os.environ.get("AZURE_OPENAI_RATE_LIMIT_BASE_DELAY", "15.0"))
 _RATE_LIMIT_MAX_DELAY = float(os.environ.get("AZURE_OPENAI_RATE_LIMIT_MAX_DELAY", "60.0"))
 
