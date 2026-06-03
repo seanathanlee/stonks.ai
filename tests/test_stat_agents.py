@@ -103,7 +103,7 @@ def _assert_pick_schema(pick: dict) -> None:
     assert required.issubset(pick.keys()), f"Missing keys: {required - pick.keys()}"
     assert isinstance(pick["rank"], int)
     assert isinstance(pick["symbol"], str)
-    for key in ("expected_return_1m",):
+    for key in ["expected_return_1m"]:
         assert isinstance(pick[key], float), f"{key} is not float"
         assert math.isfinite(pick[key]), f"{key} is not finite"
 
