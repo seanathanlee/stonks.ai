@@ -40,10 +40,13 @@ PRICE_HISTORY_DAYS = 30
 # Statistical agents are CPU-bound and don't hit any external rate limits, so
 # they can all run in parallel.
 STAT_MAX_WORKERS = int(os.environ.get("STAT_AGENT_MAX_WORKERS", "8"))
-# LLM child agents share an Azure OpenAI deployment with finite TPM/RPM. Cap
-# concurrency to avoid 429 "Too Many Requests" responses that cause agents to
-# silently drop out of the run.
-LLM_MAX_WORKERS = int(os.environ.get("LLM_AGENT_MAX_WORKERS", "3"))
+# LLM child agents share an Azure OpenAI deployment with finite TPM/RPM. Even
+# modest concurrency (e.g. 3 workers) can sustain enough pressure on the
+# deployment quota that individual requests exhaust both the SDK's internal
+# retries and our wrapper's retry budget, causing agents to drop out of the
+# run with 429 errors. Default to fully sequential LLM calls; operators with
+# higher-tier deployments can opt into concurrency via the env var.
+LLM_MAX_WORKERS = int(os.environ.get("LLM_AGENT_MAX_WORKERS", "1"))
 
 
 # ---------------------------------------------------------------------------
