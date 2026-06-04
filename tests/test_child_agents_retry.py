@@ -118,25 +118,17 @@ def test_acquire_call_slot_sleeps_when_called_too_soon(
     monkeypatch.setattr(child_agents, "_rate_lock", threading.Lock())
 
     sleeps: list[float] = []
-    call_count = 0
 
-    # Simulate the first call having happened 3 seconds ago.
-    fake_now = time.monotonic() - 3.0
-    monkeypatch.setattr(child_agents, "_last_call_time", fake_now)
+    # Simulate the last API call having happened 3 seconds ago.
+    # monotonic() inside the lock returns "now" = last_call_time + 3.
+    last_call = time.monotonic() - 3.0
+    monkeypatch.setattr(child_agents, "_last_call_time", last_call)
+    monkeypatch.setattr(child_agents.time, "monotonic", lambda: last_call + 3.0)
 
-    def fake_monotonic() -> float:
-        nonlocal call_count
-        call_count += 1
-        # First call: the "now" inside the lock; second call: after sleeping.
-        return fake_now + 3.0 if call_count <= 2 else fake_now + 10.0
-
-    with (
-        patch.object(child_agents.time, "sleep", side_effect=sleeps.append),
-        patch.object(child_agents.time, "monotonic", side_effect=fake_monotonic),
-    ):
+    with patch.object(child_agents.time, "sleep", side_effect=sleeps.append):
         child_agents._acquire_call_slot()
 
-    # Expected sleep: 10.0 - 3.0 = 7.0 s
+    # Expected sleep: _CALL_INTERVAL - elapsed = 10.0 - 3.0 = 7.0 s
     assert len(sleeps) == 1
     assert abs(sleeps[0] - 7.0) < 0.01
 

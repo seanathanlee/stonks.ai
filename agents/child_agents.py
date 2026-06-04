@@ -124,6 +124,11 @@ def _acquire_call_slot() -> None:
     (though the default LLM_MAX_WORKERS=1 means only one thread runs at a time).
     The lock ensures serialised access to _last_call_time, so multiple threads
     queue up rather than all sleeping independently and then firing together.
+
+    _last_call_time is recorded *before* sleeping so that any thread waiting
+    for the lock computes its own wait from the moment this slot was acquired
+    rather than from the moment it finished sleeping.  This keeps actual call
+    spacing close to _CALL_INTERVAL regardless of how many threads are queued.
     """
     if _CALL_INTERVAL <= 0:
         return
@@ -131,10 +136,14 @@ def _acquire_call_slot() -> None:
     with _rate_lock:
         now = time.monotonic()
         wait = _CALL_INTERVAL - (now - _last_call_time)
+        # Record the slot acquisition time before sleeping.  Threads waiting
+        # for this lock will then measure their own gap from this moment, so
+        # they will sleep only the remaining portion of _CALL_INTERVAL rather
+        # than the full interval again.
+        _last_call_time = now + max(wait, 0)
         if wait > 0:
             log.debug("Rate limiter: spacing LLM calls — sleeping %.2fs.", wait)
             time.sleep(wait)
-        _last_call_time = time.monotonic()
 
 
 def _retry_after_seconds(err: Exception) -> float | None:
