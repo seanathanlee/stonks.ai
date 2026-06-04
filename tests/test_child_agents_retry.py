@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -58,6 +60,8 @@ def test_zero_retry_after_does_not_skip_backoff(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(child_agents, "_RATE_LIMIT_MAX_DELAY", 60.0)
     # Drop jitter to keep the assertion exact.
     monkeypatch.setattr(child_agents.random, "uniform", lambda _a, _b: 0.0)
+    # Disable proactive rate limiter so only retry backoff sleeps are captured.
+    monkeypatch.setattr(child_agents, "_CALL_INTERVAL", 0.0)
 
     client = _StubClient(
         [
@@ -83,6 +87,8 @@ def test_server_hint_above_floor_is_respected(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(child_agents, "_RATE_LIMIT_BASE_DELAY", 1.0)
     monkeypatch.setattr(child_agents, "_RATE_LIMIT_MAX_DELAY", 60.0)
     monkeypatch.setattr(child_agents.random, "uniform", lambda _a, _b: 0.0)
+    # Disable proactive rate limiter so only retry backoff sleeps are captured.
+    monkeypatch.setattr(child_agents, "_CALL_INTERVAL", 0.0)
 
     client = _StubClient(
         [
@@ -97,6 +103,94 @@ def test_server_hint_above_floor_is_respected(monkeypatch: pytest.MonkeyPatch) -
 
     assert result == "ok"
     assert sleeps == [12.0]
+
+
+# ---------------------------------------------------------------------------
+# Proactive rate limiter (_acquire_call_slot) tests
+# ---------------------------------------------------------------------------
+
+
+def test_acquire_call_slot_sleeps_when_called_too_soon(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_acquire_call_slot must sleep the remaining interval when called too soon."""
+    monkeypatch.setattr(child_agents, "_CALL_INTERVAL", 10.0)
+    monkeypatch.setattr(child_agents, "_rate_lock", threading.Lock())
+
+    sleeps: list[float] = []
+
+    # Simulate the last API call having happened 3 seconds ago.
+    # monotonic() inside the lock returns "now" = last_call_time + 3.
+    last_call = time.monotonic() - 3.0
+    monkeypatch.setattr(child_agents, "_last_call_time", last_call)
+    monkeypatch.setattr(child_agents.time, "monotonic", lambda: last_call + 3.0)
+
+    with patch.object(child_agents.time, "sleep", side_effect=sleeps.append):
+        child_agents._acquire_call_slot()
+
+    # Expected sleep: _CALL_INTERVAL - elapsed = 10.0 - 3.0 = 7.0 s
+    assert len(sleeps) == 1
+    assert abs(sleeps[0] - 7.0) < 0.01
+
+
+def test_acquire_call_slot_no_sleep_when_interval_elapsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_acquire_call_slot must not sleep when enough time has already passed."""
+    monkeypatch.setattr(child_agents, "_CALL_INTERVAL", 5.0)
+    monkeypatch.setattr(child_agents, "_rate_lock", threading.Lock())
+
+    # Simulate the last call having happened 10 s ago — well beyond the 5 s interval.
+    monkeypatch.setattr(child_agents, "_last_call_time", time.monotonic() - 10.0)
+
+    sleeps: list[float] = []
+    with patch.object(child_agents.time, "sleep", side_effect=sleeps.append):
+        child_agents._acquire_call_slot()
+
+    assert sleeps == [], "No sleep expected when the interval has already elapsed"
+
+
+def test_acquire_call_slot_disabled_when_interval_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setting _CALL_INTERVAL=0 must bypass the rate limiter entirely."""
+    monkeypatch.setattr(child_agents, "_CALL_INTERVAL", 0.0)
+
+    sleeps: list[float] = []
+    with patch.object(child_agents.time, "sleep", side_effect=sleeps.append):
+        child_agents._acquire_call_slot()
+
+    assert sleeps == []
+
+
+def test_chat_completion_calls_acquire_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """_chat_completion_with_retry must call _acquire_call_slot before each attempt."""
+    monkeypatch.setattr(child_agents, "_RATE_LIMIT_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(child_agents, "_RATE_LIMIT_BASE_DELAY", 1.0)
+    monkeypatch.setattr(child_agents, "_RATE_LIMIT_MAX_DELAY", 60.0)
+    monkeypatch.setattr(child_agents.random, "uniform", lambda _a, _b: 0.0)
+
+    slot_calls: list[None] = []
+
+    def fake_acquire() -> None:
+        slot_calls.append(None)
+
+    client = _StubClient(
+        [
+            _make_rate_limit_error(),
+            "ok",
+        ]
+    )
+
+    with (
+        patch.object(child_agents, "_acquire_call_slot", fake_acquire),
+        patch.object(child_agents.time, "sleep", lambda _: None),
+    ):
+        result = child_agents._chat_completion_with_retry(client)  # type: ignore[arg-type]
+
+    assert result == "ok"
+    # One slot acquisition per attempt (2 attempts total).
+    assert len(slot_calls) == 2
 
 
 # ---------------------------------------------------------------------------
