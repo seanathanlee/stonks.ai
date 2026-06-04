@@ -31,6 +31,16 @@ from agents.horizons import FORECAST_HORIZONS, HORIZON_RETURN_KEYS
 
 log = logging.getLogger(__name__)
 
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+
 # ---------------------------------------------------------------------------
 # In-process LLM result cache
 # ---------------------------------------------------------------------------
@@ -122,9 +132,19 @@ _last_call_time: float = 0.0  # monotonic timestamp of the most recent API call
 # every LLM agent can exceed low-quota Azure OpenAI TPM limits even when calls
 # are fully serialized.  Keep the LLM prompt bounded by preselecting the most
 # relevant candidates for each strategy.  Set to 0 to disable limiting.
-_LLM_MAX_SIGNALS = int(os.environ.get("AZURE_OPENAI_MAX_SIGNAL_CANDIDATES", "100"))
+_LLM_MAX_SIGNALS = _int_env("AZURE_OPENAI_MAX_SIGNAL_CANDIDATES", 100)
 _OVERSOLD_LLM_AGENTS = {"mean_reversion", "value_investor", "contrarian_investor"}
 _LOW_VOLATILITY_LLM_AGENTS = {"low_volatility"}
+# Candidate scoring is only a prefilter to keep prompts under Azure OpenAI TPM
+# limits.  It emphasizes the strongest strategy-specific signals while keeping
+# the final ranking decision inside the LLM prompt.
+_ROC_30D_WEIGHT = 2.0
+_ROC_10D_WEIGHT = 2.5
+_ZSCORE_WEIGHT = 5.0
+_DRAWDOWN_WEIGHT = 0.5
+_SHARPE_WEIGHT = 20.0
+_GOLDEN_CROSS_BONUS = 10.0
+_VOLATILITY_BASELINE = 100.0
 
 
 def _acquire_call_slot() -> None:
@@ -464,20 +484,20 @@ def _candidate_score(agent_name: str, signal: dict[str, Any]) -> float:
         zscore = _num(signal, "zscore_20d")
         drawdown = _num(signal, "max_drawdown_30d")
         return (
-            max(-roc_30d, 0.0) * 2.0
-            + max(-roc_10d, 0.0) * 2.5
+            max(-roc_30d, 0.0) * _ROC_30D_WEIGHT
+            + max(-roc_10d, 0.0) * _ROC_10D_WEIGHT
             + max(-roc_5d, 0.0)
-            + max(-zscore, 0.0) * 5.0
-            + max(-drawdown, 0.0) * 0.5
+            + max(-zscore, 0.0) * _ZSCORE_WEIGHT
+            + max(-drawdown, 0.0) * _DRAWDOWN_WEIGHT
         )
 
     if agent_name in _LOW_VOLATILITY_LLM_AGENTS:
         roc_30d = _num(signal, "roc_30d")
         sharpe = _num(signal, "sharpe_proxy")
-        volatility = _num(signal, "volatility_30d_ann", 100.0)
+        volatility = _num(signal, "volatility_30d_ann", _VOLATILITY_BASELINE)
         return (
-            max(100.0 - volatility, 0.0)
-            + max(sharpe, 0.0) * 20.0
+            max(_VOLATILITY_BASELINE - volatility, 0.0)
+            + max(sharpe, 0.0) * _SHARPE_WEIGHT
             + max(roc_30d, 0.0)
         )
 
@@ -486,11 +506,11 @@ def _candidate_score(agent_name: str, signal: dict[str, Any]) -> float:
     roc_5d = _num(signal, "roc_5d")
     sharpe = _num(signal, "sharpe_proxy")
     return (
-        max(roc_30d, 0.0) * 2.0
-        + max(roc_10d, 0.0) * 2.5
+        max(roc_30d, 0.0) * _ROC_30D_WEIGHT
+        + max(roc_10d, 0.0) * _ROC_10D_WEIGHT
         + max(roc_5d, 0.0)
-        + max(sharpe, 0.0) * 20.0
-        + (10.0 if signal.get("golden_cross") else 0.0)
+        + max(sharpe, 0.0) * _SHARPE_WEIGHT
+        + (_GOLDEN_CROSS_BONUS if signal.get("golden_cross") else 0.0)
     )
 
 
