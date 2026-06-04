@@ -21,6 +21,7 @@ import logging
 import math
 import os
 import random
+import threading
 import time
 from typing import Any
 
@@ -87,6 +88,54 @@ _RATE_LIMIT_MAX_ATTEMPTS = int(os.environ.get("AZURE_OPENAI_RATE_LIMIT_RETRIES",
 _RATE_LIMIT_BASE_DELAY = float(os.environ.get("AZURE_OPENAI_RATE_LIMIT_BASE_DELAY", "15.0"))
 _RATE_LIMIT_MAX_DELAY = float(os.environ.get("AZURE_OPENAI_RATE_LIMIT_MAX_DELAY", "60.0"))
 
+# ---------------------------------------------------------------------------
+# Global proactive rate limiter (Option C)
+# ---------------------------------------------------------------------------
+# Azure OpenAI enforces a rolling 60-second RPM quota.  Reactive retries
+# (backing off after a 429) are unreliable when 8 LLM agents run back-to-
+# back, because each agent's retry attempts consume additional quota slots
+# before the window resets for the next agent.
+#
+# This limiter proactively enforces a minimum wall-clock interval between
+# successive API calls *across all agents in this process*.  By spacing calls
+# at least AZURE_OPENAI_CALL_INTERVAL seconds apart, we stay within the
+# rolling window without ever hitting a 429 in the first place.  The reactive
+# retry logic below is kept as a safety net for unexpected bursts.
+#
+# Tune the interval to match your deployment's RPM limit:
+#   interval ≥ 60 / RPM_LIMIT
+# For example, a 10 RPM limit → interval ≥ 6 s.  The default of 8 s gives a
+# comfortable headroom below 8 RPM and allows the retry logic to kick in
+# before the next agent starts.
+#
+# Set AZURE_OPENAI_CALL_INTERVAL=0 to disable pacing (e.g. high-tier
+# deployments or local testing with a mock API).
+_CALL_INTERVAL = float(os.environ.get("AZURE_OPENAI_CALL_INTERVAL", "8.0"))
+
+_rate_lock = threading.Lock()
+_last_call_time: float = 0.0  # monotonic timestamp of the most recent API call
+
+
+def _acquire_call_slot() -> None:
+    """Block until at least _CALL_INTERVAL seconds have passed since the last call.
+
+    All LLM API calls must pass through this gate so that successive calls are
+    spaced at least _CALL_INTERVAL seconds apart, even across concurrent threads
+    (though the default LLM_MAX_WORKERS=1 means only one thread runs at a time).
+    The lock ensures serialised access to _last_call_time, so multiple threads
+    queue up rather than all sleeping independently and then firing together.
+    """
+    if _CALL_INTERVAL <= 0:
+        return
+    global _last_call_time
+    with _rate_lock:
+        now = time.monotonic()
+        wait = _CALL_INTERVAL - (now - _last_call_time)
+        if wait > 0:
+            log.debug("Rate limiter: spacing LLM calls — sleeping %.2fs.", wait)
+            time.sleep(wait)
+        _last_call_time = time.monotonic()
+
 
 def _retry_after_seconds(err: Exception) -> float | None:
     """Extract the Retry-After hint (seconds) from an OpenAI error, if any."""
@@ -114,9 +163,21 @@ def _retry_after_seconds(err: Exception) -> float | None:
 
 
 def _chat_completion_with_retry(client: AzureOpenAI, **kwargs: Any) -> Any:
-    """Call client.chat.completions.create with backoff on 429/Rate-limit errors."""
+    """Call client.chat.completions.create with proactive pacing and backoff on 429s.
+
+    Each attempt is gated by :func:`_acquire_call_slot` which enforces a global
+    minimum interval between successive API calls (proactive rate limiting).
+    If a 429 is still received despite that, exponential backoff with jitter is
+    applied before the next attempt (reactive rate limiting).
+    """
     last_err: Exception | None = None
     for attempt in range(1, _RATE_LIMIT_MAX_ATTEMPTS + 1):
+        # Proactively enforce the inter-call interval before every attempt,
+        # including retries.  For retries the backoff sleep below already
+        # exceeds _CALL_INTERVAL, so _acquire_call_slot will be a no-op;
+        # for the very first call it ensures we don't immediately follow the
+        # previous agent's last call.
+        _acquire_call_slot()
         try:
             return client.chat.completions.create(**kwargs)
         except RateLimitError as err:
