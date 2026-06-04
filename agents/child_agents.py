@@ -124,7 +124,7 @@ _last_call_time: float = 0.0  # monotonic timestamp of the most recent API call
 # relevant candidates for each strategy.  Set to 0 to disable limiting.
 _LLM_MAX_SIGNALS = int(os.environ.get("AZURE_OPENAI_MAX_SIGNAL_CANDIDATES", "100"))
 _OVERSOLD_LLM_AGENTS = {"mean_reversion", "value_investor", "contrarian_investor"}
-_LOW_VOLATILITY_LLM_AGENT = "low_volatility"
+_LOW_VOLATILITY_LLM_AGENTS = {"low_volatility"}
 
 
 def _acquire_call_slot() -> None:
@@ -457,15 +457,12 @@ def _num(signal: dict[str, Any], key: str, default: float = 0.0) -> float:
 
 def _candidate_score(agent_name: str, signal: dict[str, Any]) -> float:
     """Return a deterministic relevance score for preselecting LLM candidates."""
-    roc_30d = _num(signal, "roc_30d")
-    roc_10d = _num(signal, "roc_10d")
-    roc_5d = _num(signal, "roc_5d")
-    sharpe = _num(signal, "sharpe_proxy")
-    zscore = _num(signal, "zscore_20d")
-    drawdown = _num(signal, "max_drawdown_30d")
-    volatility = _num(signal, "volatility_30d_ann", 100.0)
-
     if agent_name in _OVERSOLD_LLM_AGENTS:
+        roc_30d = _num(signal, "roc_30d")
+        roc_10d = _num(signal, "roc_10d")
+        roc_5d = _num(signal, "roc_5d")
+        zscore = _num(signal, "zscore_20d")
+        drawdown = _num(signal, "max_drawdown_30d")
         return (
             max(-roc_30d, 0.0) * 2.0
             + max(-roc_10d, 0.0) * 2.5
@@ -474,13 +471,20 @@ def _candidate_score(agent_name: str, signal: dict[str, Any]) -> float:
             + max(-drawdown, 0.0) * 0.5
         )
 
-    if agent_name == _LOW_VOLATILITY_LLM_AGENT:
+    if agent_name in _LOW_VOLATILITY_LLM_AGENTS:
+        roc_30d = _num(signal, "roc_30d")
+        sharpe = _num(signal, "sharpe_proxy")
+        volatility = _num(signal, "volatility_30d_ann", 100.0)
         return (
             max(100.0 - volatility, 0.0)
             + max(sharpe, 0.0) * 20.0
             + max(roc_30d, 0.0)
         )
 
+    roc_30d = _num(signal, "roc_30d")
+    roc_10d = _num(signal, "roc_10d")
+    roc_5d = _num(signal, "roc_5d")
+    sharpe = _num(signal, "sharpe_proxy")
     return (
         max(roc_30d, 0.0) * 2.0
         + max(roc_10d, 0.0) * 2.5
