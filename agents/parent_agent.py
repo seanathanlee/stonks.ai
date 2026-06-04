@@ -25,7 +25,7 @@ from typing import Any
 
 from agents.adx_client import get_all_price_history, ingest_forecasts, now_utc_iso
 from agents.child_agents import CHILD_AGENTS, compute_all_signals, run_child_agent
-from agents.horizons import HORIZON_RETURN_KEYS as HORIZON_KEYS
+from agents.horizons import HORIZON_RETURN_BOUNDS, HORIZON_RETURN_KEYS as HORIZON_KEYS
 from agents.stat_agents import STAT_AGENTS, run_stat_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -67,13 +67,15 @@ def _build_forecast_rows(
             expected_return = pick.get(key)
             if expected_return is None:
                 continue
+            min_return, max_return = HORIZON_RETURN_BOUNDS[horizon]
+            bounded_return = min(max(float(expected_return), min_return), max_return)
             rows.append(
                 {
                     "reportTime": report_time,
                     "agentName": agent_name,
                     "symbol": symbol,
                     "horizon": horizon,
-                    "expectedReturn": float(expected_return),
+                    "expectedReturn": bounded_return,
                     "rank": int(rank),
                 }
             )
