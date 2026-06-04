@@ -38,6 +38,9 @@ ALL_HORIZONS: dict[str, int] = {
 # child-agent LLM schema.
 FORECAST_HORIZONS: dict[str, int] = {
     "1m": 21,
+    "3m": 63,
+    "6m": 126,
+    "1y": 252,
 }
 
 # ---------------------------------------------------------------------------
