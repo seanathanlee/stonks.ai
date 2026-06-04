@@ -19,11 +19,11 @@ Each model function has the signature::
 
     model_fn(symbol: str, prices: list[float]) -> dict[str, float]
 
-where the returned dict maps the horizon label ("1m") to the expected
+where the returned dict maps each active horizon label to the expected
 percentage return.
 
 The shared runner ``run_stat_agent`` applies a model function to every symbol
-in the price dataset, ranks symbols by their 1-month expected return, and
+in the price dataset, ranks symbols by expected return, and
 returns the top 5 picks in the standard ADX forecast schema used by all child
 agents.
 
@@ -92,7 +92,7 @@ def run_stat_agent(
     Returns
     -------
     List of ≤5 pick dicts compatible with the ADX forecast schema:
-        symbol, rank, expected_return_1m, reasoning.
+        symbol, rank, expected_return_<horizon>, reasoning.
     """
     # Build a {symbol: [price, ...]} map for the factory.
     price_map: dict[str, list[float]] = {

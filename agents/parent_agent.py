@@ -5,7 +5,7 @@ Coordinates all 9 child agents and persists results to Azure Data Explorer.
 Workflow:
   1. Pull the last 30 days of NASDAQ price data from the ADX `dailyStockPrice` table.
   2. Fan out to all 9 child agents concurrently (ThreadPoolExecutor).
-  3. Collect each agent's 5 ranked picks for the 1-month horizon.
+  3. Collect each agent's 5 ranked picks for each active forecast horizon.
   4. Write every forecast row into the ADX `agentStockForecast` table.
   5. Print a consolidated summary report.
 
@@ -89,7 +89,7 @@ def _print_summary(
     print(f"Stonks.ai Multi-Agent Forecast  |  {report_time}")
     print("=" * 70)
 
-    for horizon in ["1m"]:
+    for horizon in HORIZON_KEYS:
         horizon_rows = [r for r in all_forecasts if r["horizon"] == horizon]
         # Aggregate: sum expected returns across agents for each symbol
         symbol_returns: dict[str, list[float]] = {}

@@ -4,7 +4,7 @@ Nine independent child agents, each embodying a distinct investment philosophy.
 
 Each agent receives pre-computed quantitative signals derived from 30 days of
 NASDAQ price history and returns exactly 5 ranked stock picks with expected
-returns for the 1-month horizon.
+returns for each active forecast horizon.
 
 Signals are computed in Python before being passed to the LLM, so the model
 focuses on strategy reasoning and ranking rather than raw arithmetic.
@@ -598,7 +598,8 @@ def run_child_agent(
                 "Apply your strategy's selection criteria to these signals. Where your strategy "
                 "requires fundamental data (P/E, ROE, revenue growth, etc.), apply your own "
                 "knowledge of each company's fundamentals. Then call the submit_picks tool with "
-                "your top 5 ranked stocks and expected percentage return for the 1-month horizon.\n\n"
+                f"your top 5 ranked stocks and expected percentage return for each requested "
+                f"horizon ({_horizons_str}).\n\n"
                 f"SIGNALS:\n{signals_text}"
             ),
         },
