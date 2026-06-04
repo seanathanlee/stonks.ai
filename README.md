@@ -259,7 +259,7 @@ And optionally add these **repository variables**:
 |----------|---------|-------------|
 | `BASE_NAME` | `stonksai` | Prefix for all Azure resource names |
 | `AZURE_OPENAI_DEPLOYMENT` | `gpt-4.1` | Azure OpenAI model deployment name (forecasting pipeline) |
-| `AZURE_OPENAI_CHAT_DEPLOYMENT` | `gpt-4.1-mini` | Azure OpenAI model deployment for the chat UI (overrides `AZURE_OPENAI_DEPLOYMENT` for chat) |
+| `AZURE_OPENAI_CHAT_DEPLOYMENT` | `gpt-5.1` | Azure OpenAI reasoning model deployment for the chat UI (overrides `AZURE_OPENAI_DEPLOYMENT` for chat) |
 | `AZURE_OPENAI_MAX_SIGNAL_CANDIDATES` | `100` | Maximum number of prefiltered stock signals sent to each forecasting LLM call (`0` disables limiting) |
 | `SWA_LOCATION` | `centralus` | Azure region for the Static Web App |
 

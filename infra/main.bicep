@@ -84,11 +84,11 @@ resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2023-
 }
 
 // ============================================================
-// Azure OpenAI model deployment: gpt-4.1-mini (chat UI)
+// Azure OpenAI reasoning model deployment: gpt-5.1 (chat UI)
 // ============================================================
 
-resource gpt4oMiniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = {
-  name: 'gpt-4.1-mini'
+resource gpt5_1Deployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = {
+  name: 'gpt-5.1'
   parent: cognitiveServices
   dependsOn: [gpt41Deployment]
   sku: {
@@ -98,8 +98,8 @@ resource gpt4oMiniDeployment 'Microsoft.CognitiveServices/accounts/deployments@2
   properties: {
     model: {
       format: 'OpenAI'
-      name: 'gpt-4.1-mini'
-      version: '2025-04-14'
+      name: 'gpt-5.1'
+      version: '2025-11-13'
     }
   }
 }
@@ -398,7 +398,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             [
               { name: 'AZURE_OPENAI_ENDPOINT', value: cognitiveServices.properties.endpoint }
               { name: 'AZURE_OPENAI_DEPLOYMENT', value: 'gpt-4.1' }
-              { name: 'AZURE_OPENAI_CHAT_DEPLOYMENT', value: 'gpt-4.1-mini' }
+              { name: 'AZURE_OPENAI_CHAT_DEPLOYMENT', value: 'gpt-5.1' }
               { name: 'AZURE_OPENAI_API_VERSION', value: '2025-01-01-preview' }
               { name: 'ADX_CLUSTER_URI', value: adxCluster.properties.uri }
               { name: 'ADX_DATABASE', value: 'stonksai' }
