@@ -1,0 +1,466 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.43.8.12551",
+      "templateHash": "7828021997174942887"
+    }
+  },
+  "parameters": {
+    "baseName": {
+      "type": "string",
+      "defaultValue": "stonksai",
+      "minLength": 2,
+      "metadata": {
+        "description": "Base name used to derive all resource names."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for all resources."
+      }
+    },
+    "swaLocation": {
+      "type": "string",
+      "defaultValue": "centralus",
+      "allowedValues": [
+        "centralus",
+        "eastus2",
+        "eastasia",
+        "westeurope",
+        "westus2"
+      ],
+      "metadata": {
+        "description": "Azure region for the Static Web App. Must be a region that supports Azure Static Web Apps."
+      }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "S0",
+      "allowedValues": [
+        "S0"
+      ],
+      "metadata": {
+        "description": "SKU for the Cognitive Services account."
+      }
+    },
+    "adxSkuName": {
+      "type": "string",
+      "defaultValue": "Dev(No SLA)_Standard_D11_v2",
+      "allowedValues": [
+        "Dev(No SLA)_Standard_D11_v2",
+        "Standard_D11_v2",
+        "Standard_D12_v2"
+      ],
+      "metadata": {
+        "description": "SKU name for the Azure Data Explorer cluster."
+      }
+    },
+    "adxSkuTier": {
+      "type": "string",
+      "defaultValue": "Basic",
+      "allowedValues": [
+        "Basic",
+        "Standard"
+      ],
+      "metadata": {
+        "description": "SKU tier for the Azure Data Explorer cluster."
+      }
+    },
+    "adxCapacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "metadata": {
+        "description": "Number of ADX cluster instances."
+      }
+    },
+    "azureOpenAIApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Azure OpenAI API key passed as a secure parameter so it is stored as a Container App secret."
+      }
+    },
+    "containerImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+      "metadata": {
+        "description": "Container image to run in the Container App. The deploy workflow passes the real ACR image after pushing it; the default placeholder is only used for fully-manual Bicep deployments."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.CognitiveServices/accounts",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}-ai', parameters('baseName'))]",
+      "location": "[parameters('location')]",
+      "kind": "AIServices",
+      "sku": {
+        "name": "[parameters('sku')]"
+      },
+      "properties": {
+        "customSubDomainName": "[format('{0}-ai', parameters('baseName'))]",
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', format('{0}-ai', parameters('baseName')), 'gpt-4.1')]",
+      "sku": {
+        "name": "Standard",
+        "capacity": 50
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "gpt-4.1",
+          "version": "2025-04-14"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-ai', parameters('baseName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.CognitiveServices/accounts/deployments",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', format('{0}-ai', parameters('baseName')), 'gpt-5.1')]",
+      "sku": {
+        "name": "GlobalStandard",
+        "capacity": 30
+      },
+      "properties": {
+        "model": {
+          "format": "OpenAI",
+          "name": "gpt-5.1",
+          "version": "2025-11-13"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-ai', parameters('baseName')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts/deployments', format('{0}-ai', parameters('baseName')), 'gpt-4.1')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Kusto/clusters",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}adx', parameters('baseName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('adxSkuName')]",
+        "tier": "[parameters('adxSkuTier')]",
+        "capacity": "[parameters('adxCapacity')]"
+      },
+      "properties": {
+        "enableStreamingIngest": true,
+        "enablePurge": false,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}/{1}', format('{0}adx', parameters('baseName')), 'stonksai')]",
+      "location": "[parameters('location')]",
+      "kind": "ReadWrite",
+      "properties": {
+        "softDeletePeriod": "P365D",
+        "hotCachePeriod": "P31D"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters', format('{0}adx', parameters('baseName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/scripts",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}/{1}/{2}', format('{0}adx', parameters('baseName')), 'stonksai', 'create-daily-stock-price-table')]",
+      "properties": {
+        "scriptContent": ".create-merge table dailyStockPrice (\n    reportTime: datetime,\n    symbol: string,\n    price: real,\n    priceDate: datetime\n)\n\n.alter-merge table dailyStockPrice policy retention softdelete = 365d\n\n.create-or-alter table dailyStockPrice ingestion json mapping 'dailyStockPriceMapping'\n'[{\"column\":\"reportTime\",\"path\":\"$.reportTime\",\"datatype\":\"datetime\"},{\"column\":\"symbol\",\"path\":\"$.symbol\",\"datatype\":\"string\"},{\"column\":\"price\",\"path\":\"$.price\",\"datatype\":\"real\"},{\"column\":\"priceDate\",\"path\":\"$.priceDate\",\"datatype\":\"datetime\"}]'\n",
+        "continueOnErrors": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases', format('{0}adx', parameters('baseName')), 'stonksai')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/scripts",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}/{1}/{2}', format('{0}adx', parameters('baseName')), 'stonksai', 'create-agent-stock-forecast-table')]",
+      "properties": {
+        "scriptContent": ".create-merge table agentStockForecast (\n    reportTime: datetime,\n    agentName: string,\n    symbol: string,\n    horizon: string,\n    expectedReturn: real,\n    rank: int\n)\n\n.alter-merge table agentStockForecast policy retention softdelete = 365d\n\n.create-or-alter table agentStockForecast ingestion json mapping 'agentStockForecastMapping'\n'[{\"column\":\"reportTime\",\"path\":\"$.reportTime\",\"datatype\":\"datetime\"},{\"column\":\"agentName\",\"path\":\"$.agentName\",\"datatype\":\"string\"},{\"column\":\"symbol\",\"path\":\"$.symbol\",\"datatype\":\"string\"},{\"column\":\"horizon\",\"path\":\"$.horizon\",\"datatype\":\"string\"},{\"column\":\"expectedReturn\",\"path\":\"$.expectedReturn\",\"datatype\":\"real\"},{\"column\":\"rank\",\"path\":\"$.rank\",\"datatype\":\"int\"}]'\n",
+        "continueOnErrors": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases', format('{0}adx', parameters('baseName')), 'stonksai')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/scripts",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}/{1}/{2}', format('{0}adx', parameters('baseName')), 'stonksai', 'create-daily-stock-price-mv')]",
+      "properties": {
+        "scriptContent": ".create-or-alter materialized-view with (backfill=true) dailyStockPriceMV on table dailyStockPrice\n{\n    dailyStockPrice\n    | summarize arg_max(reportTime, price) by symbol, priceDate\n}\n",
+        "continueOnErrors": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases', format('{0}adx', parameters('baseName')), 'stonksai')]",
+        "[resourceId('Microsoft.Kusto/clusters/databases/scripts', format('{0}adx', parameters('baseName')), 'stonksai', 'create-daily-stock-price-table')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/scripts",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}/{1}/{2}', format('{0}adx', parameters('baseName')), 'stonksai', 'create-agent-stock-evaluation-table')]",
+      "properties": {
+        "scriptContent": ".create-merge table agentStockEvaluation (\n    symbol: string,\n    forecastReturn: real,\n    actualReturn: real,\n    forecastRank: int,\n    actualRank: int,\n    accuracyScore: real,\n    agentName: string,\n    forecastReportTime: datetime,\n    reportTime: datetime,\n    runId: string,\n    horizon: string\n)\n\n.alter-merge table agentStockEvaluation policy retention softdelete = 365d\n\n.create-or-alter table agentStockEvaluation ingestion json mapping 'agentStockEvaluationMapping'\n'[{\"column\":\"symbol\",\"path\":\"$.symbol\",\"datatype\":\"string\"},{\"column\":\"forecastReturn\",\"path\":\"$.forecastReturn\",\"datatype\":\"real\"},{\"column\":\"actualReturn\",\"path\":\"$.actualReturn\",\"datatype\":\"real\"},{\"column\":\"forecastRank\",\"path\":\"$.forecastRank\",\"datatype\":\"int\"},{\"column\":\"actualRank\",\"path\":\"$.actualRank\",\"datatype\":\"int\"},{\"column\":\"accuracyScore\",\"path\":\"$.accuracyScore\",\"datatype\":\"real\"},{\"column\":\"agentName\",\"path\":\"$.agentName\",\"datatype\":\"string\"},{\"column\":\"forecastReportTime\",\"path\":\"$.forecastReportTime\",\"datatype\":\"datetime\"},{\"column\":\"reportTime\",\"path\":\"$.reportTime\",\"datatype\":\"datetime\"},{\"column\":\"runId\",\"path\":\"$.runId\",\"datatype\":\"string\"},{\"column\":\"horizon\",\"path\":\"$.horizon\",\"datatype\":\"string\"}]'\n",
+        "continueOnErrors": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases', format('{0}adx', parameters('baseName')), 'stonksai')]",
+        "[resourceId('Microsoft.Kusto/clusters/databases/scripts', format('{0}adx', parameters('baseName')), 'stonksai', 'create-agent-stock-forecast-table')]"
+      ]
+    },
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}acr', parameters('baseName'))]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Basic"
+      },
+      "properties": {
+        "adminUserEnabled": false,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/scripts",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}/{1}/{2}', format('{0}adx', parameters('baseName')), 'stonksai', 'create-agent-stock-forecast-mv')]",
+      "properties": {
+        "scriptContent": ".create-or-alter materialized-view with (backfill=true) agentStockForecastMV on table agentStockForecast\n{\n    agentStockForecast\n    | summarize arg_max(reportTime, expectedReturn, rank) by agentName, symbol, horizon\n}\n",
+        "continueOnErrors": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases', format('{0}adx', parameters('baseName')), 'stonksai')]",
+        "[resourceId('Microsoft.Kusto/clusters/databases/scripts', format('{0}adx', parameters('baseName')), 'stonksai', 'create-agent-stock-forecast-table')]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}-env', parameters('baseName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "zoneRedundant": false
+      }
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[format('{0}-api', parameters('baseName'))]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "environmentId": "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('baseName')))]",
+        "configuration": {
+          "ingress": {
+            "external": true,
+            "targetPort": 8000,
+            "transport": "http",
+            "allowInsecure": false
+          },
+          "secrets": "[if(not(equals(parameters('azureOpenAIApiKey'), '')), createArray(createObject('name', 'azure-openai-api-key', 'value', parameters('azureOpenAIApiKey'))), createArray())]",
+          "registries": [
+            {
+              "server": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('{0}acr', parameters('baseName'))), '2023-07-01').loginServer]",
+              "identity": "system"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "stonksai-api",
+              "image": "[parameters('containerImage')]",
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
+              },
+              "probes": [
+                {
+                  "type": "Startup",
+                  "httpGet": {
+                    "path": "/api/health",
+                    "port": 8000
+                  },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 10,
+                  "failureThreshold": 10,
+                  "timeoutSeconds": 5
+                },
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/api/health",
+                    "port": 8000
+                  },
+                  "initialDelaySeconds": 10,
+                  "periodSeconds": 30,
+                  "failureThreshold": 3,
+                  "timeoutSeconds": 5
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/api/health",
+                    "port": 8000
+                  },
+                  "initialDelaySeconds": 5,
+                  "periodSeconds": 10,
+                  "failureThreshold": 3,
+                  "timeoutSeconds": 5
+                }
+              ],
+              "env": "[concat(createArray(createObject('name', 'AZURE_OPENAI_ENDPOINT', 'value', reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-ai', parameters('baseName'))), '2023-05-01').endpoint), createObject('name', 'AZURE_OPENAI_DEPLOYMENT', 'value', 'gpt-4.1'), createObject('name', 'AZURE_OPENAI_CHAT_DEPLOYMENT', 'value', 'gpt-5.1'), createObject('name', 'AZURE_OPENAI_API_VERSION', 'value', '2025-01-01-preview'), createObject('name', 'ADX_CLUSTER_URI', 'value', reference(resourceId('Microsoft.Kusto/clusters', format('{0}adx', parameters('baseName'))), '2023-08-15').uri), createObject('name', 'ADX_DATABASE', 'value', 'stonksai'), createObject('name', 'CORS_ORIGINS', 'value', format('https://skewthis.com,https://www.skewthis.com,https://{0}', reference(resourceId('Microsoft.Web/staticSites', format('{0}-web', parameters('baseName'))), '2023-01-01').defaultHostname))), if(not(equals(parameters('azureOpenAIApiKey'), '')), createArray(createObject('name', 'AZURE_OPENAI_API_KEY', 'secretRef', 'azure-openai-api-key')), createArray()))]"
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 3
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', format('{0}acr', parameters('baseName')))]",
+        "[resourceId('Microsoft.Kusto/clusters', format('{0}adx', parameters('baseName')))]",
+        "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-ai', parameters('baseName')))]",
+        "[resourceId('Microsoft.App/managedEnvironments', format('{0}-env', parameters('baseName')))]",
+        "[resourceId('Microsoft.Web/staticSites', format('{0}-web', parameters('baseName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', format('{0}acr', parameters('baseName')))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', format('{0}acr', parameters('baseName'))), resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('baseName'))), '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]",
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('baseName'))), '2024-03-01', 'full').identity.principalId]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', format('{0}acr', parameters('baseName')))]",
+        "[resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('baseName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Kusto/clusters/databases/principalAssignments",
+      "apiVersion": "2023-08-15",
+      "name": "[format('{0}/{1}/{2}', format('{0}adx', parameters('baseName')), 'stonksai', 'containerapp-user')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('baseName'))), '2024-03-01', 'full').identity.principalId]",
+        "principalType": "App",
+        "role": "User",
+        "tenantId": "[subscription().tenantId]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Kusto/clusters/databases', format('{0}adx', parameters('baseName')), 'stonksai')]",
+        "[resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('baseName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/staticSites",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}-web', parameters('baseName'))]",
+      "location": "[parameters('swaLocation')]",
+      "sku": {
+        "name": "Free",
+        "tier": "Free"
+      },
+      "properties": {
+        "buildProperties": {
+          "skipGithubActionWorkflowGeneration": true
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Web/staticSites/customDomains",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}/{1}', format('{0}-web', parameters('baseName')), 'skewthis.com')]",
+      "properties": {
+        "validationMethod": "dns-txt-token"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/staticSites', format('{0}-web', parameters('baseName')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/staticSites/customDomains",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}/{1}', format('{0}-web', parameters('baseName')), 'www.skewthis.com')]",
+      "properties": {
+        "validationMethod": "cname-delegation"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/staticSites/customDomains', format('{0}-web', parameters('baseName')), 'skewthis.com')]",
+        "[resourceId('Microsoft.Web/staticSites', format('{0}-web', parameters('baseName')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "cognitiveServicesEndpoint": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.CognitiveServices/accounts', format('{0}-ai', parameters('baseName'))), '2023-05-01').endpoint]"
+    },
+    "cognitiveServicesId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.CognitiveServices/accounts', format('{0}-ai', parameters('baseName')))]"
+    },
+    "adxClusterUri": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Kusto/clusters', format('{0}adx', parameters('baseName'))), '2023-08-15').uri]"
+    },
+    "adxClusterId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Kusto/clusters', format('{0}adx', parameters('baseName')))]"
+    },
+    "adxDatabaseName": {
+      "type": "string",
+      "value": "stonksai"
+    },
+    "staticWebAppName": {
+      "type": "string",
+      "value": "[format('{0}-web', parameters('baseName'))]"
+    },
+    "staticWebAppDefaultHostname": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/staticSites', format('{0}-web', parameters('baseName'))), '2023-01-01').defaultHostname]"
+    },
+    "acrLoginServer": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', format('{0}acr', parameters('baseName'))), '2023-07-01').loginServer]"
+    },
+    "acrName": {
+      "type": "string",
+      "value": "[format('{0}acr', parameters('baseName'))]"
+    },
+    "containerAppName": {
+      "type": "string",
+      "value": "[format('{0}-api', parameters('baseName'))]"
+    },
+    "containerAppFqdn": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.App/containerApps', format('{0}-api', parameters('baseName'))), '2024-03-01').configuration.ingress.fqdn]"
+    }
+  }
+}
