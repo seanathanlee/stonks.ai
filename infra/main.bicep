@@ -87,7 +87,7 @@ resource gpt41Deployment 'Microsoft.CognitiveServices/accounts/deployments@2023-
 // Azure OpenAI reasoning model deployment: gpt-5.1 (chat UI)
 // ============================================================
 
-resource gpt5Dot1Deployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = {
+resource gpt5_1Deployment 'Microsoft.CognitiveServices/accounts/deployments@2023-05-01' = {
   name: 'gpt-5.1'
   parent: cognitiveServices
   dependsOn: [gpt41Deployment]
