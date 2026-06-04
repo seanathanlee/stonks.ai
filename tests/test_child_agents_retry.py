@@ -356,3 +356,59 @@ def test_different_agents_bypass_cache(monkeypatch: pytest.MonkeyPatch) -> None:
         child_agents.run_child_agent("agent_b", "strategy", stock_data)
 
     assert call_count == 2, "Different agent names must each call the LLM independently"
+
+
+def test_run_child_agent_limits_signal_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Large universes should be prefiltered before serialising signals for the LLM."""
+    monkeypatch.setattr(child_agents, "_llm_cache", {})
+    monkeypatch.setattr(child_agents, "_LLM_MAX_SIGNALS", 10)
+
+    picks = [
+        {
+            "rank": i,
+            "symbol": f"SYM{i:03d}",
+            "expected_return_1m": 1.0,
+            "expected_return_3m": 2.0,
+            "expected_return_6m": 3.0,
+            "expected_return_1y": 4.0,
+            "reasoning": "test",
+        }
+        for i in range(1, 6)
+    ]
+
+    captured_payloads: list[list[dict[str, Any]]] = []
+
+    def fake_retry(client: Any, **kwargs: Any) -> Any:
+        user_message = kwargs["messages"][1]["content"]
+        payload = user_message.split("SIGNALS:\n", 1)[1]
+        captured_payloads.append(__import__("json").loads(payload))
+        return _stub_llm_response(picks)
+
+    stock_data = {
+        f"SYM{i:03d}": [
+            {"date": f"2025-01-{day + 1:02d}", "price": 100.0 + i + day}
+            for day in range(30)
+        ]
+        for i in range(150)
+    }
+
+    with (
+        patch.object(child_agents, "_chat_completion_with_retry", fake_retry),
+        patch.object(child_agents, "_get_client", return_value=MagicMock()),
+        patch.object(child_agents, "_get_deployment", return_value="gpt-4.1"),
+    ):
+        child_agents.run_child_agent("momentum_trader", "strategy", stock_data)
+
+    assert len(captured_payloads) == 1
+    assert len(captured_payloads[0]) == 10
+
+
+def test_signal_payload_limit_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting _LLM_MAX_SIGNALS to 0 should preserve the full LLM payload."""
+    signals = [{"symbol": f"SYM{i:03d}", "roc_30d": float(i)} for i in range(25)]
+
+    monkeypatch.setattr(child_agents, "_LLM_MAX_SIGNALS", 0)
+
+    assert child_agents._select_llm_signals("momentum_trader", signals) == signals

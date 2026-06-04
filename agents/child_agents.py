@@ -31,6 +31,16 @@ from agents.horizons import FORECAST_HORIZONS, HORIZON_RETURN_KEYS
 
 log = logging.getLogger(__name__)
 
+
+def _int_env(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer, got {value!r}") from exc
+
 # ---------------------------------------------------------------------------
 # In-process LLM result cache
 # ---------------------------------------------------------------------------
@@ -117,6 +127,24 @@ _CALL_INTERVAL = float(os.environ.get("AZURE_OPENAI_CALL_INTERVAL", "65.0"))
 
 _rate_lock = threading.Lock()
 _last_call_time: float = 0.0  # monotonic timestamp of the most recent API call
+
+# Forecast snapshots can include 500+ symbols.  Sending every computed signal to
+# every LLM agent can exceed low-quota Azure OpenAI TPM limits even when calls
+# are fully serialized.  Keep the LLM prompt bounded by preselecting the most
+# relevant candidates for each strategy.  Set to 0 to disable limiting.
+_LLM_MAX_SIGNALS = _int_env("AZURE_OPENAI_MAX_SIGNAL_CANDIDATES", 100)
+_OVERSOLD_LLM_AGENTS = {"mean_reversion", "value_investor", "contrarian_investor"}
+_LOW_VOLATILITY_LLM_AGENTS = {"low_volatility"}
+# Candidate scoring is only a prefilter to keep prompts under Azure OpenAI TPM
+# limits.  It emphasizes the strongest strategy-specific signals while keeping
+# the final ranking decision inside the LLM prompt.
+_ROC_30D_WEIGHT = 2.0
+_ROC_10D_WEIGHT = 2.5
+_ZSCORE_WEIGHT = 5.0
+_DRAWDOWN_WEIGHT = 0.5
+_SHARPE_WEIGHT = 20.0
+_GOLDEN_CROSS_BONUS = 10.0
+_VOLATILITY_BASELINE = 100.0
 
 
 def _acquire_call_slot() -> None:
@@ -440,6 +468,71 @@ def compute_all_signals(
     ]
 
 
+def _num(signal: dict[str, Any], key: str, default: float = 0.0) -> float:
+    value = signal.get(key, default)
+    if isinstance(value, (int, float)):
+        return float(value)
+    return default
+
+
+def _candidate_score(agent_name: str, signal: dict[str, Any]) -> float:
+    """Return a deterministic relevance score for preselecting LLM candidates."""
+    if agent_name in _OVERSOLD_LLM_AGENTS:
+        roc_30d = _num(signal, "roc_30d")
+        roc_10d = _num(signal, "roc_10d")
+        roc_5d = _num(signal, "roc_5d")
+        zscore = _num(signal, "zscore_20d")
+        drawdown = _num(signal, "max_drawdown_30d")
+        return (
+            max(-roc_30d, 0.0) * _ROC_30D_WEIGHT
+            + max(-roc_10d, 0.0) * _ROC_10D_WEIGHT
+            + max(-roc_5d, 0.0)
+            + max(-zscore, 0.0) * _ZSCORE_WEIGHT
+            + max(-drawdown, 0.0) * _DRAWDOWN_WEIGHT
+        )
+
+    if agent_name in _LOW_VOLATILITY_LLM_AGENTS:
+        roc_30d = _num(signal, "roc_30d")
+        sharpe = _num(signal, "sharpe_proxy")
+        volatility = _num(signal, "volatility_30d_ann", _VOLATILITY_BASELINE)
+        return (
+            max(_VOLATILITY_BASELINE - volatility, 0.0)
+            + max(sharpe, 0.0) * _SHARPE_WEIGHT
+            + max(roc_30d, 0.0)
+        )
+
+    roc_30d = _num(signal, "roc_30d")
+    roc_10d = _num(signal, "roc_10d")
+    roc_5d = _num(signal, "roc_5d")
+    sharpe = _num(signal, "sharpe_proxy")
+    return (
+        max(roc_30d, 0.0) * _ROC_30D_WEIGHT
+        + max(roc_10d, 0.0) * _ROC_10D_WEIGHT
+        + max(roc_5d, 0.0)
+        + max(sharpe, 0.0) * _SHARPE_WEIGHT
+        + (_GOLDEN_CROSS_BONUS if signal.get("golden_cross") else 0.0)
+    )
+
+
+def _select_llm_signals(
+    agent_name: str,
+    signals: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the bounded signal list sent to the LLM for one strategy."""
+    if _LLM_MAX_SIGNALS <= 0 or len(signals) <= _LLM_MAX_SIGNALS:
+        return signals
+
+    selected = sorted(
+        signals,
+        key=lambda signal: (
+            _candidate_score(agent_name, signal),
+            str(signal.get("symbol", "")),
+        ),
+        reverse=True,
+    )[:_LLM_MAX_SIGNALS]
+    return sorted(selected, key=lambda signal: str(signal.get("symbol", "")))
+
+
 def run_child_agent(
     name: str,
     strategy_prompt: str,
@@ -473,13 +566,22 @@ def run_child_agent(
     else:
         signals = compute_all_signals(stock_data)
 
+    llm_signals = _select_llm_signals(name, signals)
+    if len(llm_signals) < len(signals):
+        log.info(
+            "Agent '%s': limiting LLM signal payload from %d to %d candidates.",
+            name,
+            len(signals),
+            len(llm_signals),
+        )
+
     # Check the in-process cache before hitting the LLM.
-    cache_key = (name, _signals_hash(signals))
+    cache_key = (name, _signals_hash(llm_signals))
     if cache_key in _llm_cache:
         log.info("Cache hit for agent '%s' — skipping LLM call.", name)
         return _llm_cache[cache_key]
 
-    signals_text = json.dumps(signals, separators=(",", ":"))
+    signals_text = json.dumps(llm_signals, separators=(",", ":"))
 
     messages = [
         {"role": "system", "content": strategy_prompt},
