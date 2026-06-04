@@ -52,3 +52,16 @@ FORECAST_HORIZONS: dict[str, int] = {
 HORIZON_RETURN_KEYS: dict[str, str] = {
     h: f"expected_return_{h}" for h in FORECAST_HORIZONS
 }
+
+# ---------------------------------------------------------------------------
+# Forecast sanity bounds
+# ---------------------------------------------------------------------------
+# Forecasts are generated from short, 30-day price windows.  These limits keep
+# extrapolated multi-month outputs in plausible percentage-return ranges and
+# prevent unstable statistical fits or LLM tool calls from dominating summaries.
+HORIZON_RETURN_BOUNDS: dict[str, tuple[float, float]] = {
+    "1m": (-100.0, 200.0),
+    "3m": (-100.0, 300.0),
+    "6m": (-100.0, 500.0),
+    "1y": (-100.0, 1000.0),
+}

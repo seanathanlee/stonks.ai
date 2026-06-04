@@ -27,7 +27,11 @@ from typing import Any
 
 from openai import APIStatusError, AzureOpenAI, RateLimitError
 
-from agents.horizons import FORECAST_HORIZONS, HORIZON_RETURN_KEYS
+from agents.horizons import (
+    FORECAST_HORIZONS,
+    HORIZON_RETURN_BOUNDS,
+    HORIZON_RETURN_KEYS,
+)
 
 log = logging.getLogger(__name__)
 
@@ -403,7 +407,12 @@ def _build_response_schema() -> dict[str, Any]:
     horizon_properties = {
         HORIZON_RETURN_KEYS[h]: {
             "type": "number",
-            "description": f"Expected % return over {h}.",
+            "minimum": HORIZON_RETURN_BOUNDS[h][0],
+            "maximum": HORIZON_RETURN_BOUNDS[h][1],
+            "description": (
+                f"Expected % return over {h}, bounded to the plausible range "
+                f"{HORIZON_RETURN_BOUNDS[h][0]}% to {HORIZON_RETURN_BOUNDS[h][1]}%."
+            ),
         }
         for h in FORECAST_HORIZONS
     }
