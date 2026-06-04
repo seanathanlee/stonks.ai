@@ -64,7 +64,11 @@ def _get_client() -> AzureOpenAI:
             azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
             api_key=os.environ["AZURE_OPENAI_API_KEY"],
             api_version=os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01"),
-            max_retries=int(os.environ.get("AZURE_OPENAI_MAX_RETRIES", "5")),
+            # Keep SDK retries disabled by default so the explicit retry wrapper
+            # below controls pacing. The SDK's short internal retry delays can
+            # otherwise consume multiple Azure OpenAI quota slots before our
+            # process-level rate limiter sees a single failure.
+            max_retries=int(os.environ.get("AZURE_OPENAI_MAX_RETRIES", "0")),
         )
     return _client
 
@@ -102,15 +106,14 @@ _RATE_LIMIT_MAX_DELAY = float(os.environ.get("AZURE_OPENAI_RATE_LIMIT_MAX_DELAY"
 # rolling window without ever hitting a 429 in the first place.  The reactive
 # retry logic below is kept as a safety net for unexpected bursts.
 #
-# Tune the interval to match your deployment's RPM limit:
-#   interval ≥ 60 / RPM_LIMIT
-# For example, a 10 RPM limit → interval ≥ 6 s.  The default of 8 s gives a
-# comfortable headroom below 8 RPM and allows the retry logic to kick in
-# before the next agent starts.
+# Tune the interval to match your deployment's TPM/RPM limit. These prompts are
+# large because each LLM receives the full symbol signal set, so TPM is often the
+# binding quota. The default of 65 s is conservative for low-quota deployments
+# and keeps snapshot backfills moving without repeated 429 retry storms.
 #
 # Set AZURE_OPENAI_CALL_INTERVAL=0 to disable pacing (e.g. high-tier
 # deployments or local testing with a mock API).
-_CALL_INTERVAL = float(os.environ.get("AZURE_OPENAI_CALL_INTERVAL", "8.0"))
+_CALL_INTERVAL = float(os.environ.get("AZURE_OPENAI_CALL_INTERVAL", "65.0"))
 
 _rate_lock = threading.Lock()
 _last_call_time: float = 0.0  # monotonic timestamp of the most recent API call
