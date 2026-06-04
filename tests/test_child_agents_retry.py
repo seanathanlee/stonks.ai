@@ -14,6 +14,25 @@ from openai import RateLimitError
 from agents import child_agents
 
 
+def test_get_client_disables_sdk_retries_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shared retry wrapper owns Azure OpenAI pacing, not SDK retries."""
+    captured_kwargs: dict[str, Any] = {}
+
+    class _FakeAzureOpenAI:
+        def __init__(self, **kwargs: Any) -> None:
+            captured_kwargs.update(kwargs)
+
+    monkeypatch.setattr(child_agents, "_client", None)
+    monkeypatch.setattr(child_agents, "AzureOpenAI", _FakeAzureOpenAI)
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com/")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "test-key")
+    monkeypatch.delenv("AZURE_OPENAI_MAX_RETRIES", raising=False)
+
+    child_agents._get_client()
+
+    assert captured_kwargs["max_retries"] == 0
+
+
 def _make_rate_limit_error(retry_after: str | None = None) -> RateLimitError:
     """Build a RateLimitError with an optional Retry-After header."""
     headers = {}
